@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K.OS</title>
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/kos.css">
+</head>
+<body>
+<div id="stage" class="stage" data-screen="home">
+
+  <div class="bg" aria-hidden="true">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="orb orb-c"></div>
+    <svg class="waves" width="3840" height="1080" viewBox="0 0 3840 1080" fill="none">
+      <path class="w1" d="M0 560 Q 480 440 960 560 T 1920 560 T 2880 560 T 3840 560"></path>
+      <path class="w2" d="M0 640 Q 240 570 480 640 T 960 640 T 1440 640 T 1920 640 T 2400 640 T 2880 640 T 3360 640 T 3840 640"></path>
+      <path class="w3" d="M0 720 Q 160 690 320 720 T 640 720 T 960 720 T 1280 720 T 1600 720 T 1920 720 T 2240 720 T 2560 720 T 2880 720 T 3200 720 T 3520 720 T 3840 720"></path>
+    </svg>
+  </div>
+  <div class="hero-bg" aria-hidden="true"><img class="hb" alt=""><img class="hb" alt=""></div>
+  <div class="bg-shade" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo" role="img" aria-label="K.OS">K<span class="logo-dot"></span></div>
+      <nav class="tabs" aria-label="Bölümler">
+        <button type="button" class="tab f" data-group="tabs" data-tab="home">Ana Sayfa</button>
+        <button type="button" class="tab f" data-group="tabs" data-tab="games">Oyunlar</button>
+        <button type="button" class="tab f" data-group="tabs" data-tab="apps">Uygulamalar</button>
+        <button type="button" class="tab f" data-group="tabs" data-tab="store">Mağaza</button>
+        <button type="button" class="tab f" data-group="tabs" data-tab="settings">Ayarlar</button>
+      </nav>
+    </div>
+    <div class="status">
+      <span id="netStatus" class="status-icon" role="img" aria-label="İnternet"></span>
+      <span id="padStatus" class="status-icon" role="img" aria-label="Kumanda"></span>
+      <span id="clock" class="clock">00:00</span>
+      <div class="avatar" role="img" aria-label="Profil: Kerem">K</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="screen" id="screen-home" aria-label="Ana Sayfa">
+      <div class="home-row" id="homeRow" aria-label="Son kullanılanlar"></div>
+      <div class="hero" id="hero"></div>
+      <div class="side-cards" id="sideCards"></div>
+    </section>
+
+    <section class="screen padded" id="screen-games" aria-label="Oyunlar">
+      <div class="screen-head">
+        <h1>Oyunlar</h1>
+        <span class="screen-sub" id="gamesNote"></span>
+      </div>
+      <div class="games-grid scroll" id="gamesGrid"></div>
+    </section>
+
+    <section class="screen padded" id="screen-apps" aria-label="Uygulamalar">
+      <div class="screen-head">
+        <h1>Uygulamalar</h1>
+        <span class="screen-sub">Tam ekran açılır, kumandayla kullanılır.</span>
+      </div>
+      <div class="apps-grid" id="appsGrid"></div>
+    </section>
+
+    <section class="screen padded" id="screen-store" aria-label="Mağaza">
+      <div class="store-top">
+        <div class="store-feature" id="storeFeature"></div>
+        <div class="panel store-downloads" id="storeDownloads"></div>
+      </div>
+      <div class="chips" id="storeChips" role="tablist" aria-label="Kategoriler"></div>
+      <div class="store-grid scroll" id="storeGrid"></div>
+    </section>
+
+    <section class="screen padded" id="screen-settings" aria-label="Ayarlar">
+      <div class="settings">
+        <nav class="settings-nav" id="settingsNav" aria-label="Ayar kategorileri"></nav>
+        <div class="settings-pane" id="settingsPane"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="hints" id="hints"></footer>
+
+  <div class="overlay power" id="power" role="dialog" aria-modal="true" aria-labelledby="powerTitle" hidden>
+    <div class="power-box">
+      <div class="power-head">
+        <h1 id="powerTitle">Güç</h1>
+        <span class="power-note" id="powerNote"></span>
+      </div>
+      <div class="power-grid">
+        <button type="button" class="power-btn f has-dot" data-action="power:sleep">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg>
+          <span><b>Uyku Modu</b><small>Kumandayla uyandır</small></span>
+        </button>
+        <button type="button" class="power-btn f has-dot" data-action="power:restart">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 4v5h-5"></path></svg>
+          <span><b>Yeniden Başlat</b><small>K.OS yeniden açılır</small></span>
+        </button>
+        <button type="button" class="power-btn f has-dot" data-action="power:windows">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14"></path><path d="M15 4l4 4-4 4"></path><path d="M20 16H6"></path><path d="M9 12l-4 4 4 4"></path></svg>
+          <span><b>Windows'a Geç</b><small>Valorant, LoL ve daha fazlası</small></span>
+        </button>
+        <button type="button" class="power-btn f has-dot" data-action="power:off">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9"></path><path d="M6.3 6.3a8 8 0 1 0 11.4 0"></path></svg>
+          <span><b>Kapat</b><small>Konsolu tamamen kapatır</small></span>
+        </button>
+      </div>
+      <div class="panel power-info">
+        <div><span class="muted">Ses</span><div class="vol"><div class="bar"><div style="width:70%"></div></div><b>70</b></div></div>
+        <div><span class="muted">Kumanda</span><b id="powerPad">-</b></div>
+        <div><span class="muted">İnternet</span><b id="powerNet">-</b></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay launch" id="launch" role="dialog" aria-modal="true" aria-labelledby="launchTitle" hidden>
+    <div class="launch-dot"></div>
+    <h1 id="launchTitle"></h1>
+    <p id="launchText"></p>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<script src="js/data.js"></script>
+<!-- Optional private demo setup (ignored by Git). Missing on other machines, which is fine. -->
+<script src="demo-art/demo.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

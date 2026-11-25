@@ -5,3 +5,7 @@ _build-*/**
 *_chunkah_*
 *_rpm-ostree_*
 windows/*log*.txt
+
+# Private demo logos for investor demos. Never commit them (see launcher/demo-art/README.txt)
+launcher/demo-art/*
+!launcher/demo-art/README.txt

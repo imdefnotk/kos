@@ -30,6 +30,7 @@ systemctl reboot
 | `system_files/usr/libexec/kos-system-setup` | Automatic login and Windows-friendly clock |
 | `system_files/usr/libexec/kos-flatpak-setup` | Installs Google Chrome, retries until online |
 | `system_files/usr/share/kos/artwork/` | K.OS tile pictures (made by `art/make_tile_art.py`) |
+| `launcher/` | The K.OS home screen app (phase 1 prototype). See `launcher/README.md` |
 | `windows/kos-windows-setup.ps1` | Windows side: "Return to K.OS" shortcut, Fast Startup off |
 
 Based on the [Universal Blue image template](https://github.com/ublue-os/image-template).
