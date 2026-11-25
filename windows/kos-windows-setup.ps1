@@ -1,16 +1,28 @@
 # K.OS - Windows side setup
 #
-# Normal run (no admin needed):
+# Part 1 (no admin needed):
 #   Creates the "Return to K.OS" shortcut on the Desktop and in the Start menu.
 #   It asks "Restart into K.OS now?" and then restarts the PC.
 #
-# Admin run (add -Admin, Windows asks for permission):
+# How to run: double-click kos-windows-setup.cmd in the same folder.
+# After the shortcuts are made, it asks Windows for admin permission and then:
 #   Turns off Windows Fast Startup (needed for safe dual boot) and shows
 #   the Secure Boot state and the firmware boot order for checking.
 
 param([switch]$Admin)
 
 $ErrorActionPreference = 'Stop'
+
+if ($Admin) {
+    try { Start-Transcript -Path (Join-Path $PSScriptRoot 'setup-log-admin.txt') -Force | Out-Null } catch {}
+}
+
+trap {
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    Write-Host "At: $($_.InvocationInfo.PositionMessage)"
+    if ($Admin) { Read-Host 'Press Enter to close' }
+    exit 1
+}
 
 if (-not $Admin) {
     $kosDir = Join-Path $env:LOCALAPPDATA 'KOS'
@@ -38,12 +50,10 @@ if ($answer -eq "Yes") { shutdown.exe /r /t 0 }
         Write-Host "Created: $(Join-Path $folder 'Return to K.OS.lnk')"
     }
 
-    $fast = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -ErrorAction SilentlyContinue).HiberbootEnabled
-    if ($fast -eq 1) {
-        Write-Host 'Fast Startup is ON. Run this script again with -Admin to turn it off.'
-    } else {
-        Write-Host 'Fast Startup is already OFF.'
-    }
+    Write-Host ''
+    Write-Host 'Next: Windows will ask for permission to turn off Fast Startup. Click Yes.'
+    Start-Sleep -Seconds 2
+    Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Admin')
     exit 0
 }
 
@@ -60,3 +70,5 @@ try {
 Write-Host ''
 Write-Host 'Firmware boot list (the first entry under {fwbootmgr} is what the PC boots by default):'
 bcdedit /enum firmware
+Write-Host ''
+Read-Host 'Done. Press Enter to close this window'

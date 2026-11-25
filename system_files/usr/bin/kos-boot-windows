@@ -9,21 +9,42 @@ set -uo pipefail
 EFIBOOTMGR=/usr/bin/efibootmgr
 [ -x "${EFIBOOTMGR}" ] || EFIBOOTMGR=/usr/sbin/efibootmgr
 
+# Messages: Turkish by default, English if the system language is English
+case "${LANG:-}" in
+    en*)
+        T_TITLE="K.OS - Switch to Windows"
+        T_QUESTION="Restart into Windows now?\n\nRestarting Windows later brings you back to K.OS."
+        T_YES="Restart"
+        T_NO="Cancel"
+        T_NOTFOUND="Could not find Windows on this console."
+        T_FAILED="Could not set Windows as the next start. Nothing was changed."
+        ;;
+    *)
+        T_TITLE="K.OS - Windows'a Geç"
+        T_QUESTION="Şimdi Windows ile yeniden başlatılsın mı?\n\nWindows'u yeniden başlattığınızda K.OS'a geri dönersiniz."
+        T_YES="Yeniden Başlat"
+        T_NO="Vazgeç"
+        T_NOTFOUND="Bu konsolda Windows bulunamadı."
+        T_FAILED="Windows bir sonraki açılış olarak ayarlanamadı. Hiçbir şey değiştirilmedi."
+        ;;
+esac
+
 show_error() {
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "K.OS" --error "$1"
+        kdialog --title "${T_TITLE}" --error "$1"
     elif command -v zenity >/dev/null 2>&1; then
-        zenity --error --title="K.OS" --text="$1"
+        zenity --error --title="${T_TITLE}" --text="$1"
     fi
     echo "K.OS error: $1" >&2
 }
 
 ask_confirm() {
-    local question="Restart into Windows now?\n\nRestarting Windows later brings you back to K.OS."
+    local question
+    question="$(printf '%b' "${T_QUESTION}")"
     if command -v kdialog >/dev/null 2>&1; then
-        kdialog --title "K.OS - Switch to Windows" --yes-label "Restart" --no-label "Cancel" --yesno "$(printf '%b' "${question}")"
+        kdialog --title "${T_TITLE}" --yes-label "${T_YES}" --no-label "${T_NO}" --yesno "${question}"
     elif command -v zenity >/dev/null 2>&1; then
-        zenity --question --title="K.OS - Switch to Windows" --ok-label="Restart" --cancel-label="Cancel" --text="$(printf '%b' "${question}")"
+        zenity --question --title="${T_TITLE}" --ok-label="${T_YES}" --cancel-label="${T_NO}" --text="${question}"
     else
         return 0
     fi
@@ -33,7 +54,7 @@ ask_confirm() {
 WIN_BOOT_ID="$("${EFIBOOTMGR}" 2>/dev/null | grep -i "Windows Boot Manager" | head -n 1 | sed -E 's/^Boot([0-9A-Fa-f]{4}).*/\1/')"
 
 if ! [[ "${WIN_BOOT_ID}" =~ ^[0-9A-Fa-f]{4}$ ]]; then
-    show_error "Could not find Windows Boot Manager in the firmware boot list."
+    show_error "${T_NOTFOUND}"
     exit 1
 fi
 
@@ -45,7 +66,7 @@ fi
 ask_confirm || exit 0
 
 if ! pkexec /usr/libexec/kos-bootnext-windows >/dev/null; then
-    show_error "Could not set Windows as the next boot. Nothing was changed."
+    show_error "${T_FAILED}"
     exit 1
 fi
 

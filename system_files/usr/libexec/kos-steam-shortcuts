@@ -6,24 +6,37 @@ Safe rules:
   * Keeps every non-Steam game you added yourself.
   * Only writes the file when something actually changed, and keeps a backup
     named shortcuts.vdf.kos-backup next to it.
-  * Each tile gets the same ID Steam itself would give it, so your controller
-    layouts and artwork for a tile are kept across updates.
+  * Each tile gets the same ID Steam itself would give it.
+  * New tiles are marked as "just played" once, so they appear in the first
+    row of the Steam Home screen.
+  * Installs the K.OS artwork for each tile, without overwriting artwork the
+    user picked themselves.
+  * The "Switch to Windows" tile only appears when Windows is installed.
 """
 import glob
+import hashlib
+import json
 import os
 import shutil
 import struct
 import subprocess
 import sys
+import time
 import zlib
 
+ART_DIR = "/usr/share/kos/artwork"
+
+# key, tile name, program, launch options, old names this tile had before
 KOS_TILES = [
-    ("Switch to Windows", "/usr/bin/kos-boot-windows", ""),
-    ("Xbox Game Pass", "/usr/bin/kos-webapp", "app https://www.xbox.com/play gamepass"),
-    ("Netflix", "/usr/bin/kos-webapp", "app https://www.netflix.com netflix"),
-    ("HBO Max", "/usr/bin/kos-webapp", "app https://www.hbomax.com hbomax"),
-    ("Web Browser", "/usr/bin/kos-webapp", "browser https://www.google.com browser"),
+    ("windows", "Windows'a Geç", "/usr/bin/kos-boot-windows", "", ["Switch to Windows"]),
+    ("xcloud", "Xbox Bulut Oyun", "/usr/bin/kos-webapp", "app https://www.xbox.com/play gamepass", ["Xbox Game Pass"]),
+    ("netflix", "Netflix", "/usr/bin/kos-webapp", "app https://www.netflix.com netflix", ["Netflix"]),
+    ("hbomax", "HBO Max", "/usr/bin/kos-webapp", "app https://www.hbomax.com hbomax", ["HBO Max"]),
+    ("browser", "İnternet", "/usr/bin/kos-webapp", "browser https://www.google.com browser", ["Web Browser"]),
 ]
+
+# Steam artwork file names (by tile ID) and the K.OS picture for each
+ART_FILES = [("{id}p.png", "portrait.png"), ("{id}.png", "wide.png"), ("{id}_hero.png", "hero.png")]
 
 # Binary VDF field types used by shortcuts.vdf
 T_MAP, T_STR, T_INT, T_FLOAT, T_U64, T_END = 0x00, 0x01, 0x02, 0x03, 0x07, 0x08
@@ -85,13 +98,13 @@ def steam_shortcut_id(exe, name):
     return struct.unpack("<i", struct.pack("<I", unsigned))[0]
 
 
-def new_entry(name, exe_q, start_q, opts, appid):
+def new_entry(name, exe_q, start_q, opts, appid, icon):
     return {
         "appid": (T_INT, appid),
         "AppName": (T_STR, name),
         "Exe": (T_STR, exe_q),
         "StartDir": (T_STR, start_q),
-        "icon": (T_STR, ""),
+        "icon": (T_STR, icon),
         "ShortcutPath": (T_STR, ""),
         "LaunchOptions": (T_STR, opts),
         "IsHidden": (T_INT, 0),
@@ -101,35 +114,122 @@ def new_entry(name, exe_q, start_q, opts, appid):
         "Devkit": (T_INT, 0),
         "DevkitGameID": (T_STR, ""),
         "DevkitOverrideAppID": (T_INT, 0),
-        "LastPlayTime": (T_INT, 0),
+        # "Just played" so the new tile shows in the first row of Steam Home
+        "LastPlayTime": (T_INT, int(time.time())),
         "FlatpakAppID": (T_STR, ""),
         "tags": (T_MAP, {"0": (T_STR, "K.OS")}),
     }
 
 
-def apply_tiles(shortcuts):
-    """Return a new ordered shortcuts map with the K.OS tiles added or refreshed."""
+def windows_installed():
+    """True if the firmware has a Windows Boot Manager entry. Unknown counts as True."""
+    for exe in ("/usr/bin/efibootmgr", "/usr/sbin/efibootmgr"):
+        if os.path.exists(exe):
+            try:
+                out = subprocess.run([exe], capture_output=True, text=True, timeout=10)
+            except Exception:
+                return True
+            if out.returncode != 0:
+                return True
+            return "windows boot manager" in out.stdout.lower()
+    return True
+
+
+def tile_key(entry):
+    """Which K.OS tile (if any) an existing Steam entry is."""
+    exe = entry.get("Exe", (T_STR, ""))[1].strip('"')
+    opts = entry.get("LaunchOptions", (T_STR, ""))[1].strip()
+    name = entry.get("AppName", (T_STR, ""))[1]
+    for key, tname, texe, topts, old in KOS_TILES:
+        if exe != texe:
+            continue
+        if texe.endswith("kos-boot-windows"):
+            return key
+        if opts == topts or name == tname or name in old:
+            return key
+    return None
+
+
+def apply_tiles(shortcuts, with_windows=True):
+    """Return (new shortcuts map, {key: unsigned tile ID}) with the K.OS tiles added or refreshed."""
     entries = [v for _, (t, v) in shortcuts.items() if t == T_MAP]
-    by_name = {}
+    found = {}
+    kept = []
     for e in entries:
-        name = e.get("AppName", (T_STR, ""))[1]
-        by_name.setdefault(name, e)
-    for name, exe, opts in KOS_TILES:
+        key = tile_key(e)
+        if key is None:
+            kept.append(e)
+        elif key not in found:
+            found[key] = e
+            kept.append(e)
+        # a second copy of the same K.OS tile is dropped
+    ids = {}
+    for key, name, exe, opts, _old in KOS_TILES:
+        e = found.get(key)
+        if key == "windows" and not with_windows:
+            if e is not None:
+                kept.remove(e)
+            continue
         exe_q = '"%s"' % exe
         start_q = '"%s"' % os.path.dirname(exe)
         appid = steam_shortcut_id(exe_q, name)
-        e = by_name.get(name)
+        icon = os.path.join(ART_DIR, key, "icon.png")
         if e is None:
-            entries.append(new_entry(name, exe_q, start_q, opts, appid))
+            kept.append(new_entry(name, exe_q, start_q, opts, appid, icon))
         else:
+            if e.get("appid", (T_INT, 0))[1] != appid:
+                # renamed tile = new ID in Steam, so mark it "just played" again
+                e["LastPlayTime"] = (T_INT, int(time.time()))
             e["appid"] = (T_INT, appid)
+            e["AppName"] = (T_STR, name)
             e["Exe"] = (T_STR, exe_q)
             e["StartDir"] = (T_STR, start_q)
             e["LaunchOptions"] = (T_STR, opts)
-    return {str(i): (T_MAP, e) for i, e in enumerate(entries)}
+            e["icon"] = (T_STR, icon)
+        ids[key] = appid & 0xFFFFFFFF
+    return {str(i): (T_MAP, e) for i, e in enumerate(kept)}, ids
 
 
-def process_file(path):
+def sha(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def install_art(cfg_dir, ids):
+    """Copy K.OS pictures into Steam's artwork folder. A picture the user changed is left alone."""
+    grid = os.path.join(cfg_dir, "grid")
+    os.makedirs(grid, exist_ok=True)
+    record_path = os.path.join(grid, ".kos-art.json")
+    try:
+        with open(record_path) as f:
+            record = json.load(f)
+    except Exception:
+        record = {}
+    changed = False
+    for key, uid in ids.items():
+        for pattern, src_name in ART_FILES:
+            src = os.path.join(ART_DIR, key, src_name)
+            if not os.path.exists(src):
+                continue
+            dst_name = pattern.format(id=uid)
+            dst = os.path.join(grid, dst_name)
+            if os.path.exists(dst):
+                current = sha(dst)
+                if record.get(dst_name) != current:
+                    continue  # user picked their own picture
+                if current == sha(src):
+                    continue  # already up to date
+            shutil.copyfile(src, dst)
+            record[dst_name] = sha(dst)
+            changed = True
+    if changed:
+        with open(record_path, "w") as f:
+            json.dump(record, f, indent=1)
+    return changed
+
+
+def process_file(path, with_windows=True):
+    """Update one shortcuts.vdf. Returns (changed, {key: tile ID})."""
     root = {"shortcuts": (T_MAP, {})}
     original = b""
     if os.path.exists(path):
@@ -139,17 +239,18 @@ def process_file(path):
             root, _ = parse_map(original, 0)
             if "shortcuts" not in root:
                 root["shortcuts"] = (T_MAP, {})
-    root["shortcuts"] = (T_MAP, apply_tiles(root["shortcuts"][1]))
+    new_map, ids = apply_tiles(root["shortcuts"][1], with_windows)
+    root["shortcuts"] = (T_MAP, new_map)
     new_data = dump_map(root)
     if new_data == original:
-        return False
+        return False, ids
     if original:
         shutil.copy2(path, path + ".kos-backup")
     tmp = path + ".kos-tmp"
     with open(tmp, "wb") as f:
         f.write(new_data)
     os.replace(tmp, path)
-    return True
+    return True, ids
 
 
 def steam_running():
@@ -164,6 +265,7 @@ def main():
         os.path.expanduser("~/.local/share/Steam"),
         os.path.expanduser("~/.steam/steam"),
     ]
+    with_windows = windows_installed()
     seen = set()
     found = False
     for root in steam_roots:
@@ -180,8 +282,10 @@ def main():
             os.makedirs(cfg, exist_ok=True)
             path = os.path.join(cfg, "shortcuts.vdf")
             try:
-                changed = process_file(path)
-                print("%s: %s" % (path, "K.OS tiles updated" if changed else "already up to date"))
+                changed, ids = process_file(path, with_windows)
+                print("%s: %s" % (path, "K.OS tiles updated" if changed else "tiles already up to date"))
+                if install_art(cfg, ids):
+                    print("%s: K.OS artwork installed" % os.path.join(cfg, "grid"))
             except Exception as err:  # never break login because of one bad file
                 print("%s: skipped (%s)" % (path, err), file=sys.stderr)
     if not found:

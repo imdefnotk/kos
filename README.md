@@ -29,6 +29,7 @@ systemctl reboot
 | `system_files/usr/libexec/kos-steam-shortcuts` | Adds the K.OS tiles to Steam |
 | `system_files/usr/libexec/kos-system-setup` | Automatic login and Windows-friendly clock |
 | `system_files/usr/libexec/kos-flatpak-setup` | Installs Google Chrome, retries until online |
+| `system_files/usr/share/kos/artwork/` | K.OS tile pictures (made by `art/make_tile_art.py`) |
 | `windows/kos-windows-setup.ps1` | Windows side: "Return to K.OS" shortcut, Fast Startup off |
 
 Based on the [Universal Blue image template](https://github.com/ublue-os/image-template).

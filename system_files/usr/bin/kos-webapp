@@ -15,7 +15,10 @@ URL="${2:-https://www.google.com}"
 PROFILE="${3:-browser}"
 
 if ! flatpak info "${BROWSER_ID}" >/dev/null 2>&1; then
-    MSG="The K.OS browser is still being downloaded in the background. Please make sure you are online and try again in a few minutes."
+    case "${LANG:-}" in
+        en*) MSG="The K.OS browser is still being downloaded in the background. Please make sure you are online and try again in a few minutes." ;;
+        *) MSG="K.OS tarayıcısı arka planda hâlâ indiriliyor. Lütfen internete bağlı olduğunuzdan emin olun ve birkaç dakika sonra tekrar deneyin." ;;
+    esac
     if command -v kdialog >/dev/null 2>&1; then
         kdialog --title "K.OS" --sorry "${MSG}"
     elif command -v zenity >/dev/null 2>&1; then

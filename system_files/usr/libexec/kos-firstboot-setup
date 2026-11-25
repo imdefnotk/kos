@@ -18,6 +18,8 @@ mkdir -p "${APPS_DIR}" "${AUTOSTART_DIR}"
 rm -f "${AUTOSTART_DIR}/kos-steam-bigpicture.desktop"
 rm -f "${HOME}/.config/kos-initialized"
 
+ART=/usr/share/kos/artwork
+
 write_launcher() {
     # $1 file name, $2 display name, $3 command, $4 icon, $5 categories
     cat > "${APPS_DIR}/$1" << EOF
@@ -31,11 +33,16 @@ Categories=$5
 EOF
 }
 
-write_launcher kos-windows.desktop  "Switch to Windows" "/usr/bin/kos-boot-windows" "computer" "System;"
-write_launcher kos-gamepass.desktop "Xbox Game Pass"    "/usr/bin/kos-webapp app https://www.xbox.com/play gamepass" "input-gaming" "Game;"
-write_launcher kos-netflix.desktop  "Netflix"           "/usr/bin/kos-webapp app https://www.netflix.com netflix" "video-television" "AudioVideo;"
-write_launcher kos-hbo.desktop      "HBO Max"           "/usr/bin/kos-webapp app https://www.hbomax.com hbomax" "video-television" "AudioVideo;"
-write_launcher kos-browser.desktop  "Web Browser"       "/usr/bin/kos-webapp browser https://www.google.com browser" "web-browser" "Network;WebBrowser;"
+# Only offer "Switch to Windows" when this console has Windows
+if efibootmgr 2>/dev/null | grep -qi "Windows Boot Manager"; then
+    write_launcher kos-windows.desktop "Windows'a Geç" "/usr/bin/kos-boot-windows" "${ART}/windows/icon.png" "System;"
+else
+    rm -f "${APPS_DIR}/kos-windows.desktop"
+fi
+write_launcher kos-gamepass.desktop "Xbox Bulut Oyun" "/usr/bin/kos-webapp app https://www.xbox.com/play gamepass" "${ART}/xcloud/icon.png" "Game;"
+write_launcher kos-netflix.desktop  "Netflix"         "/usr/bin/kos-webapp app https://www.netflix.com netflix" "${ART}/netflix/icon.png" "AudioVideo;"
+write_launcher kos-hbo.desktop      "HBO Max"         "/usr/bin/kos-webapp app https://www.hbomax.com hbomax" "${ART}/hbomax/icon.png" "AudioVideo;"
+write_launcher kos-browser.desktop  "İnternet"        "/usr/bin/kos-webapp browser https://www.google.com browser" "${ART}/browser/icon.png" "Network;WebBrowser;"
 
 if [ "${KOS_SESSION_MODE}" = "nvidia-desktop" ]; then
     # Only K.OS should start Steam at login. This hides any other Steam

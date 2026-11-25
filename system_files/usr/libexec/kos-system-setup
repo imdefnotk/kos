@@ -2,8 +2,11 @@
 # K.OS system setup. Runs as the system on every boot, before the login screen.
 # 1. Clock: store hardware time as local time, the way Windows does, so neither
 #    OS shows the wrong time after switching.
-# 2. Automatic login (NVIDIA flavor): log the first user straight into KDE so
-#    Steam Big Picture opens without a password screen.
+# 2. Steam tiles: add the K.OS tiles and artwork to each user's Steam, while
+#    Steam is still closed.
+# 3. Automatic login (NVIDIA desktop flavor): log the first user straight into
+#    KDE so Steam Big Picture opens without a password screen. (Gaming Mode
+#    images log in automatically on their own.)
 #    To turn automatic login off, create the empty file /etc/kos/no-autologin
 set -uo pipefail
 
@@ -18,7 +21,18 @@ if [ "$(timedatectl show -p LocalRTC --value 2>/dev/null)" != "yes" ]; then
     timedatectl set-local-rtc 1 || echo "K.OS: could not switch the clock to local time" >&2
 fi
 
-# 2. Automatic login
+# 2. Steam tiles and artwork for every user. Done here, before anyone logs in,
+#    because Steam is guaranteed to be closed at this moment (in Gaming Mode
+#    Steam starts the instant the user is logged in).
+while IFS=: read -r name _ uid _ _ home shell; do
+    if [ "${uid}" -ge 1000 ] && [ "${uid}" -lt 60000 ] && [ -d "${home}" ]; then
+        case "${shell}" in *nologin|*false) continue ;; esac
+        runuser -u "${name}" -- env HOME="${home}" /usr/libexec/kos-steam-shortcuts \
+            || echo "K.OS: could not update Steam tiles for ${name}" >&2
+    fi
+done < /etc/passwd
+
+# 3. Automatic login
 SDDM_FILE=/etc/sddm.conf.d/zz-kos-autologin.conf
 PLM_FILE=/etc/plasmalogin.conf.d/zz-kos-autologin.conf
 
