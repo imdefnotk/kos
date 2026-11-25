@@ -463,6 +463,8 @@ main { position: absolute; inset: 0; }
 }
 .launch h1 { font-family: 'Space Grotesk', sans-serif; font-size: 96px; font-weight: 700; letter-spacing: -0.04em; }
 .launch p { font-size: 24px; color: var(--muted); max-width: 900px; text-align: center; line-height: 1.5; }
+.launch.playing { background: #000; animation: none; }
+.launch.playing > * { visibility: hidden; }
 .launch-dot {
   width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 24px 4px rgba(var(--accent-rgb), 0.6);

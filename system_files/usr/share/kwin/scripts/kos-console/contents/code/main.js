@@ -1,8 +1,9 @@
 /*
   K.OS Console (KWin script).
   While K.OS Home is open, every new game or app window:
-    1. moves to the screen K.OS Home is on (no more windows between two monitors)
-    2. goes full screen (games only; K.OS web apps are already full screen)
+    1. moves to the screen K.OS Home is on
+    2. is centered on it (games choose full screen themselves; forcing it made
+       older games draw in a corner). K.OS Home shows black behind small games.
     3. comes to the front
   When K.OS Home is not open, the normal KDE desktop is left alone.
 */
@@ -55,8 +56,17 @@ function handle(w) {
     if (home.output && w.output !== home.output) {
         workspace.sendClientToScreen(w, home.output);
     }
-    if (!isBrowser(w) && w.fullScreenable && !w.fullScreen) {
-        w.fullScreen = true;
+    if (!w.fullScreen && home.output) {
+        var area = home.output.geometry;
+        var fg = w.frameGeometry;
+        if (fg.width < area.width || fg.height < area.height) {
+            w.frameGeometry = {
+                x: area.x + Math.round((area.width - fg.width) / 2),
+                y: area.y + Math.round((area.height - fg.height) / 2),
+                width: fg.width,
+                height: fg.height
+            };
+        }
     }
     workspace.activeWindow = w;
 }

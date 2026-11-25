@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# K.OS Home: the K.OS console home screen (phase 2 test version).
+# K.OS Home: the K.OS console home screen.
 # 1. Starts the K.OS Home helper (reads your Steam games, starts them, opens K.OS apps)
 # 2. Opens K.OS Home full screen in Google Chrome
-# Close it with Alt+F4. Later (phase 3) K.OS will boot straight into it.
+# kos-session starts it at login. Opening it from the app menu also turns
+# developer desktop mode off, so the next start is a console again.
 #
 # Check what the helper sees without opening anything:   kos-home --list
 set -uo pipefail
@@ -16,6 +17,11 @@ LOG="${XDG_RUNTIME_DIR:-/tmp}/kos-home-helper.log"
 
 if [ "${1:-}" = "--list" ]; then
     exec python3 "${HELPER}" --list
+fi
+
+# Started by hand (not by kos-session): leave developer desktop mode
+if [ "${1:-}" != "--session" ]; then
+    rm -f "${HOME}/.config/kos-desktop-mode"
 fi
 
 # Only one K.OS Home at a time. The lock stays held while K.OS Home is open

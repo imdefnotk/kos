@@ -559,6 +559,10 @@
     if (cat.id === 'windows') {
       extra = '<button type="button" class="btn primary f" style="align-self:flex-start" data-group="set-pane" data-action="power:windows"><span class="dot"></span>Windows\'a Geç</button>';
     }
+    if (cat.id === 'sistem' && live.platform === 'linux') {
+      extra = '<div class="panel row"><div class="row-text"><b>Masaüstü modu (geliştirici)</b><span>K.OS Home kapanır, normal masaüstü ve tüm ekranlar açılır. Geri dönmek için menüden K.OS Home\'u açın.</span></div>' +
+        '<button type="button" class="btn f" data-group="set-pane" data-action="desktop:">Masaüstüne geç</button></div>';
+    }
     pane.innerHTML = '<h1>' + esc(cat.name) + '</h1>' +
       '<div class="panel plan"><span class="plan-kicker">BU SAYFADA OLACAKLAR</span><ul>' +
       items.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
@@ -762,6 +766,10 @@
     else if (kind === 'level') { setLevel(arg); }
     else if (kind === 'power') { powerAction(arg); }
     else if (kind === 'demo') { toast(arg); }
+    else if (kind === 'desktop') {
+      toast('Masaüstüne geçiliyor...');
+      api('/api/desktop', { method: 'POST' }).catch(function () { toast('Masaüstüne geçilemedi.'); });
+    }
   }
 
   function setFilter(id) {
@@ -881,6 +889,7 @@
   function closeOverlay() {
     if (!state.overlay) { return; }
     if (state.overlay === 'launch' && window.KOSAudio) { KOSAudio.duck(false); }
+    $('#launch').classList.remove('playing');
     $('#' + state.overlay).hidden = true;
     state.overlay = null;
     if (state.beforeOverlay && visible(state.beforeOverlay)) { setFocus(state.beforeOverlay); } else { focusFirstIn(state.screen); }
@@ -1138,7 +1147,10 @@
     KOSAudio.duck(document.hidden || !document.hasFocus() || state.overlay === 'launch');
   }
   window.addEventListener('blur', function () {
-    if (state.overlay === 'launch') { state.leftForGame = true; }
+    if (state.overlay === 'launch') {
+      state.leftForGame = true;
+      $('#launch').classList.add('playing');
+    }
     syncDuck();
   });
   window.addEventListener('focus', function () {

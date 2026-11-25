@@ -342,6 +342,28 @@ def open_steam_url(url):
         run_detached(["xdg-open", url])
 
 
+def desktop_mode():
+    """K.OS only: developer desktop mode. Stops K.OS Home from coming back,
+    turns all displays back on and closes K.OS Home."""
+    if IS_WINDOWS:
+        return False
+    cfg = os.path.join(os.path.expanduser("~"), ".config")
+    os.makedirs(cfg, exist_ok=True)
+    open(os.path.join(cfg, "kos-desktop-mode"), "w").close()
+    steps = ["sleep 1"]
+    try:
+        out = subprocess.run(["kscreen-doctor", "--json"], capture_output=True, text=True, timeout=10).stdout
+        for o in json.loads(out or "{}").get("outputs", []):
+            name = str(o.get("name", ""))
+            if o.get("connected") and not o.get("enabled") and re.match(r"^[A-Za-z0-9_.-]+$", name):
+                steps.append("kscreen-doctor output.%s.enable" % name)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    steps.append("pkill -f kos-profiles/kos-home")
+    run_detached(["bash", "-c", "; ".join(steps)])
+    return True
+
+
 def open_app(app_id):
     """Returns (handled, error). On Windows the launcher opens apps itself."""
     if IS_WINDOWS:
@@ -473,6 +495,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001 (report any failure to the launcher)
                 log.warning("launch %d failed: %s", appid, e)
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path == "/api/desktop":
+            ok = desktop_mode()
+            self.send_json({"ok": ok, "handled": not IS_WINDOWS})
             return
 
         m = re.match(r"^/api/open/([a-z]{1,20})$", path)

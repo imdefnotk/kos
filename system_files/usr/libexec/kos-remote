@@ -192,6 +192,25 @@ class Remote:
             self.tap(e.KEY_LEFTALT, e.KEY_F4)                 # close the app window
 
 
+STEAM_VENDOR = 0x28DE
+STEAM_VIRTUAL_PRODUCT = 0x11FF
+
+
+def is_virtual(dev):
+    """Steam (and other programs) make a virtual copy of the real controller.
+    Reading both would make every press count twice, so only real ones are used."""
+    info = dev.info
+    if info.vendor == STEAM_VENDOR and info.product == STEAM_VIRTUAL_PRODUCT:
+        return True
+    if info.bustype == 0x06:  # BUS_VIRTUAL
+        return True
+    if "virtual" in (dev.name or "").lower():
+        return True
+    if not (dev.phys or "").strip():  # made by a program (uinput), not real hardware
+        return True
+    return False
+
+
 def is_controller(dev):
     if dev.name == DEVICE_NAME:
         return False
@@ -201,19 +220,25 @@ def is_controller(dev):
     return e.BTN_SOUTH in keys and e.ABS_X in abs_codes and e.ABS_Y in abs_codes
 
 
+IGNORED = set()
+
+
 def scan(known):
     found = {}
     for path in evdev.list_devices():
-        if path in known:
+        if path in known or path in IGNORED:
             continue
         try:
             dev = evdev.InputDevice(path)
         except OSError:
             continue
-        if is_controller(dev):
+        if is_controller(dev) and not is_virtual(dev):
             found[path] = dev
-            log.info("controller: %s (%s)", dev.name, path)
+            log.info("controller: %s (%s) phys=%s", dev.name, path, dev.phys)
         else:
+            if is_controller(dev):
+                log.info("ignored virtual controller: %s (%s)", dev.name, path)
+            IGNORED.add(path)
             dev.close()
     return found
 
