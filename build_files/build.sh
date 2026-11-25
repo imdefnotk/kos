@@ -1,34 +1,50 @@
 #!/usr/bin/env bash
-set -ouex pipefail
+# K.OS build script. Runs once inside GitHub Actions while the image is being built.
+# It does NOT run on your PC.
+set -euxo pipefail
+
+KOS_TARGET="${KOS_TARGET:-kos-nvidia}"
+KOS_SESSION_MODE="${KOS_SESSION_MODE:-nvidia-desktop}"
 
 echo "Building K.OS target: ${KOS_TARGET} (${KOS_SESSION_MODE})"
 
-# Ensure executable permissions on K.OS binaries and helpers
-chmod +x /usr/bin/kos-*
-chmod +x /usr/libexec/kos-*
+# 1. Make every K.OS program runnable (Git on Windows does not keep this setting)
+chmod 0755 /usr/bin/kos-* /usr/libexec/kos-*
 
-# Install python3-vdf or ensure python3 is present for Steam shortcuts injection
-rpm-ostree install python3 || true
+# 2. Remove placeholder files that only exist so Git keeps empty folders
+rm -f /etc/.gitkeep /usr/.gitkeep
 
-# Hide GRUB menu for instant console boot
-if [ -f /etc/default/grub ]; then
-    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub
-    if ! grep -q "^GRUB_TIMEOUT_STYLE=" /etc/default/grub; then
-        echo "GRUB_TIMEOUT_STYLE=hidden" >> /etc/default/grub
-    fi
-fi
+# 3. Move the "Switch to Windows" permission rule into the read-only system area,
+#    so every update replaces it cleanly
+install -d -m 0755 /usr/share/polkit-1/rules.d
+mv /etc/polkit-1/rules.d/49-kos-windows-boot.rules /usr/share/polkit-1/rules.d/49-kos-windows-boot.rules
+chmod 0644 /usr/share/polkit-1/rules.d/49-kos-windows-boot.rules
 
-# Set OS branding identity
-if [ -f /usr/lib/os-release ]; then
-    sed -i 's/^PRETTY_NAME=.*/PRETTY_NAME="K.OS (Konsol OS)"/' /usr/lib/os-release
-    sed -i 's/^NAME=.*/NAME="K.OS"/' /usr/lib/os-release
-fi
+# 4. Record which K.OS flavor this is, so scripts on the PC can check it
+install -d -m 0755 /usr/share/kos
+cat > /usr/share/kos/kos-release << EOF
+KOS_TARGET=${KOS_TARGET}
+KOS_SESSION_MODE=${KOS_SESSION_MODE}
+KOS_BUILD_DATE=$(date -u +%Y-%m-%d)
+EOF
 
-# Enable first-boot user setup service globally
-systemctl enable --global kos-firstboot.service
+# 5. OS name shown in system info screens (the internal ID stays Bazzite so Bazzite tools keep working)
+sed -i 's/^PRETTY_NAME=.*/PRETTY_NAME="K.OS (Konsol OS)"/' /usr/lib/os-release
+sed -i 's/^NAME=.*/NAME="K.OS"/' /usr/lib/os-release
 
-# Regenerate initramfs to pick up boot config changes
-QUALIFIED_KERNEL="$(rpm -qa | grep -P 'kernel-(|'"$KERNEL_FLAVOR"'-)(\d+\.\d+\.\d+)' | sed -E 's/kernel-(|'"$KERNEL_FLAVOR"'-)//' | head -n 1)"
-if [ -n "${QUALIFIED_KERNEL}" ]; then
-    /usr/bin/dracut --no-hostonly --kver "${QUALIFIED_KERNEL}" --reproducible -v --add ostree -f "/lib/modules/${QUALIFIED_KERNEL}/initramfs.img"
+# 6. Background services that run as the system on every boot:
+#    kos-system-setup  = automatic login + Windows-friendly clock
+#    kos-flatpak-setup = installs Google Chrome for the web tiles, retries until it succeeds
+systemctl enable kos-system-setup.service
+systemctl enable kos-flatpak-setup.service
+
+# 7. Flavor specific startup
+if [ "${KOS_SESSION_MODE}" = "nvidia-desktop" ]; then
+    # NVIDIA: KDE starts, then kos-session opens Steam Big Picture
+    test -f /etc/xdg/autostart/kos-session.desktop
+else
+    # AMD: Bazzite Gaming Mode already starts Steam, so no KDE autostart.
+    # The per-user setup runs as a user service instead.
+    rm -f /etc/xdg/autostart/kos-session.desktop
+    systemctl --global enable kos-firstboot.service
 fi

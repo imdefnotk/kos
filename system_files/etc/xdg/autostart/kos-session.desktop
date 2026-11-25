@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=K.OS Console Mode
+Comment=Opens Steam Big Picture when you log in
+Exec=/usr/bin/kos-session
+Icon=steam
+Terminal=false
+NoDisplay=true
+OnlyShowIn=KDE;

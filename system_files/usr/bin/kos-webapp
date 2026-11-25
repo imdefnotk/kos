@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# K.OS web tiles (Xbox Game Pass, Netflix, HBO Max, Web Browser).
+# Uses Google Chrome (Flatpak) because Netflix and HBO Max need its built-in DRM (Widevine).
+#
+# Usage: kos-webapp <app|browser> <url> [profile-name]
+#   app     = full screen, no address bar (streaming tiles)
+#   browser = full screen normal browser
+# Each tile gets its own profile so every tile runs as its own window and
+# Steam can tell when you close it.
+set -uo pipefail
 
+BROWSER_ID="com.google.Chrome"
 MODE="${1:-browser}"
 URL="${2:-https://www.google.com}"
+PROFILE="${3:-browser}"
 
-# Ensure Chromium Flatpak is installed if not yet present
-if ! flatpak info org.chromium.Chromium >/dev/null 2>&1; then
-    flatpak install -y --noninteractive flathub org.chromium.Chromium
+if ! flatpak info "${BROWSER_ID}" >/dev/null 2>&1; then
+    MSG="The K.OS browser is still being downloaded in the background. Please make sure you are online and try again in a few minutes."
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "K.OS" --sorry "${MSG}"
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --warning --title="K.OS" --text="${MSG}"
+    fi
+    echo "${MSG}" >&2
+    exit 1
 fi
 
-COMMON_FLAGS=(
-    "--enable-features=UseOzonePlatform"
-    "--ozone-platform-hint=auto"
-    "--enable-gamepad-extensions"
-    "--start-fullscreen"
+PROFILE_DIR="${HOME}/.var/app/${BROWSER_ID}/kos-profiles/${PROFILE}"
+mkdir -p "${PROFILE_DIR}"
+
+FLAGS=(
+    "--user-data-dir=${PROFILE_DIR}"
     "--no-first-run"
+    "--no-default-browser-check"
+    "--password-store=basic"
+    "--start-fullscreen"
 )
 
 if [ "${MODE}" = "app" ]; then
-    exec flatpak run org.chromium.Chromium "${COMMON_FLAGS[@]}" --app="${URL}"
+    exec flatpak run "${BROWSER_ID}" "${FLAGS[@]}" "--app=${URL}"
 else
-    exec flatpak run org.chromium.Chromium "${COMMON_FLAGS[@]}" "${URL}"
+    exec flatpak run "${BROWSER_ID}" "${FLAGS[@]}" "${URL}"
 fi

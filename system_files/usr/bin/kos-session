@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# K.OS console start (NVIDIA flavor). Started automatically when you log in to KDE.
+# 1. Refreshes your K.OS launchers and settings
+# 2. Adds the K.OS tiles to Steam (only while Steam is closed, so Steam cannot overwrite them)
+# 3. Opens Steam in Big Picture
+#
+# To use the normal KDE desktop without Big Picture, create this empty file:
+#   ~/.config/kos-desktop-mode
+set -uo pipefail
+
+if [ -f "${HOME}/.config/kos-desktop-mode" ]; then
+    exit 0
+fi
+
+/usr/libexec/kos-firstboot-setup || true
+
+if ! pgrep -x steam >/dev/null 2>&1; then
+    /usr/libexec/kos-steam-shortcuts || true
+fi
+
+exec /usr/bin/steam -gamepadui

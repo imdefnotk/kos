@@ -1,0 +1,12 @@
+# Keep Linux line endings (LF) for every text file, even when edited on Windows.
+# Scripts with Windows line endings (CRLF) break on K.OS.
+* text=auto eol=lf
+
+# Binary files: never touch
+*.png binary
+*.jpg binary
+*.webm binary
+*.mp4 binary
+*.ttf binary
+*.otf binary
+*.ico binary

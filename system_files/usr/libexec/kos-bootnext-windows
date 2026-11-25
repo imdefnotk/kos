@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# K.OS helper, runs as administrator through pkexec (see 49-kos-windows-boot.rules).
+# Finds the "Windows Boot Manager" firmware entry and sets it as the boot target
+# for the NEXT restart only. Takes no input on purpose, so it cannot be misused.
+set -uo pipefail
+
+EFIBOOTMGR=/usr/bin/efibootmgr
+[ -x "${EFIBOOTMGR}" ] || EFIBOOTMGR=/usr/sbin/efibootmgr
+
+WIN_BOOT_ID="$("${EFIBOOTMGR}" 2>/dev/null | grep -i "Windows Boot Manager" | head -n 1 | sed -E 's/^Boot([0-9A-Fa-f]{4}).*/\1/')"
+
+if ! [[ "${WIN_BOOT_ID}" =~ ^[0-9A-Fa-f]{4}$ ]]; then
+    echo "Windows Boot Manager entry not found" >&2
+    exit 2
+fi
+
+if ! "${EFIBOOTMGR}" --bootnext "${WIN_BOOT_ID}" >/dev/null; then
+    echo "Could not set BootNext to ${WIN_BOOT_ID}" >&2
+    exit 3
+fi
+
+echo "${WIN_BOOT_ID}"

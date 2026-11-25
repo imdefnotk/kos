@@ -1,0 +1,15 @@
+[Unit]
+Description=K.OS browser install for web tiles (retries until online)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kos-flatpak-setup
+Restart=on-failure
+RestartSec=60
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=multi-user.target

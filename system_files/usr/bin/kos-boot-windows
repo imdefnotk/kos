@@ -1,18 +1,52 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# K.OS "Switch to Windows" tile.
+# Asks "Are you sure?", then restarts into Windows ONE time.
+# Restarting from Windows afterwards comes back to K.OS automatically.
+#
+# Test without restarting:   kos-boot-windows --check
+set -uo pipefail
 
-# Locate the Windows Boot Manager EFI entry ID (e.g., 0000, 0001)
-WIN_BOOT_ID=$(pkexec efibootmgr | grep -i "Windows Boot Manager" | head -n 1 | sed -E 's/^Boot([0-9A-Fa-f]{4}).*/\1/')
+EFIBOOTMGR=/usr/bin/efibootmgr
+[ -x "${EFIBOOTMGR}" ] || EFIBOOTMGR=/usr/sbin/efibootmgr
 
-if [ -z "${WIN_BOOT_ID}" ]; then
-    if command -v zenity >/dev/null 2>&1; then
-        zenity --error --title="K.OS - Windows Not Found" --text="Could not find Windows Boot Manager in UEFI entries. Make sure Windows is installed on an EFI partition."
-    else
-        echo "Error: Windows Boot Manager EFI entry not found."
+show_error() {
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "K.OS" --error "$1"
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --error --title="K.OS" --text="$1"
     fi
+    echo "K.OS error: $1" >&2
+}
+
+ask_confirm() {
+    local question="Restart into Windows now?\n\nRestarting Windows later brings you back to K.OS."
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "K.OS - Switch to Windows" --yes-label "Restart" --no-label "Cancel" --yesno "$(printf '%b' "${question}")"
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --question --title="K.OS - Switch to Windows" --ok-label="Restart" --cancel-label="Cancel" --text="$(printf '%b' "${question}")"
+    else
+        return 0
+    fi
+}
+
+# Reading the boot list does not need administrator rights
+WIN_BOOT_ID="$("${EFIBOOTMGR}" 2>/dev/null | grep -i "Windows Boot Manager" | head -n 1 | sed -E 's/^Boot([0-9A-Fa-f]{4}).*/\1/')"
+
+if ! [[ "${WIN_BOOT_ID}" =~ ^[0-9A-Fa-f]{4}$ ]]; then
+    show_error "Could not find Windows Boot Manager in the firmware boot list."
     exit 1
 fi
 
-# Set one-time next boot to Windows (restarting Windows afterwards returns to K.OS)
-pkexec efibootmgr --bootnext "${WIN_BOOT_ID}"
+if [ "${1:-}" = "--check" ]; then
+    echo "OK: Windows Boot Manager found as Boot${WIN_BOOT_ID}. Nothing was changed."
+    exit 0
+fi
+
+ask_confirm || exit 0
+
+if ! pkexec /usr/libexec/kos-bootnext-windows >/dev/null; then
+    show_error "Could not set Windows as the next boot. Nothing was changed."
+    exit 1
+fi
+
 systemctl reboot

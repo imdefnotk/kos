@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# K.OS system setup. Runs as the system on every boot, before the login screen.
+# 1. Clock: store hardware time as local time, the way Windows does, so neither
+#    OS shows the wrong time after switching.
+# 2. Automatic login (NVIDIA flavor): log the first user straight into KDE so
+#    Steam Big Picture opens without a password screen.
+#    To turn automatic login off, create the empty file /etc/kos/no-autologin
+set -uo pipefail
+
+KOS_SESSION_MODE="nvidia-desktop"
+if [ -f /usr/share/kos/kos-release ]; then
+    # shellcheck disable=SC1091
+    . /usr/share/kos/kos-release
+fi
+
+# 1. Clock
+if [ "$(timedatectl show -p LocalRTC --value 2>/dev/null)" != "yes" ]; then
+    timedatectl set-local-rtc 1 || echo "K.OS: could not switch the clock to local time" >&2
+fi
+
+# 2. Automatic login
+SDDM_FILE=/etc/sddm.conf.d/zz-kos-autologin.conf
+PLM_FILE=/etc/plasmalogin.conf.d/zz-kos-autologin.conf
+
+if [ "${KOS_SESSION_MODE}" != "nvidia-desktop" ] || [ -f /etc/kos/no-autologin ]; then
+    rm -f "${SDDM_FILE}" "${PLM_FILE}"
+    exit 0
+fi
+
+KOS_USER="$(awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { print $1; exit }' /etc/passwd)"
+if [ -z "${KOS_USER}" ]; then
+    echo "K.OS: no regular user found, skipping automatic login" >&2
+    exit 0
+fi
+
+write_if_changed() {
+    # $1 file, $2 content
+    mkdir -p "$(dirname "$1")"
+    if [ ! -f "$1" ] || [ "$(cat "$1")" != "$2" ]; then
+        printf '%s\n' "$2" > "$1"
+        chmod 0644 "$1"
+    fi
+}
+
+# SDDM (older Bazzite) and Plasma Login Manager (newer Bazzite) read different folders.
+# Writing both is harmless: each one only reads its own.
+write_if_changed "${SDDM_FILE}" "[Autologin]
+User=${KOS_USER}
+Session=plasma.desktop
+Relogin=false"
+
+write_if_changed "${PLM_FILE}" "[Autologin]
+User=${KOS_USER}
+Session=plasma.desktop
+Relogin=true"
+
+exit 0

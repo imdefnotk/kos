@@ -1,123 +1,58 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# K.OS per-user setup. Despite the old name it now runs at EVERY login and is safe
+# to run again and again: it simply rewrites the K.OS launchers and settings, so
+# fixes in new K.OS updates reach your account automatically.
+set -uo pipefail
 
-MARKER_FILE="${HOME}/.config/kos-initialized"
-if [ -f "${MARKER_FILE}" ]; then
-    exit 0
+KOS_SESSION_MODE="nvidia-desktop"
+if [ -f /usr/share/kos/kos-release ]; then
+    # shellcheck disable=SC1091
+    . /usr/share/kos/kos-release
 fi
 
-mkdir -p "${HOME}/.config"
-mkdir -p "${HOME}/.config/autostart"
+APPS_DIR="${HOME}/.local/share/applications"
+AUTOSTART_DIR="${HOME}/.config/autostart"
+mkdir -p "${APPS_DIR}" "${AUTOSTART_DIR}"
 
-# Pre-install Chromium Flatpak in background for Web Browser, Netflix, HBO, and Game Pass
-flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
-flatpak install -y --noninteractive flathub org.chromium.Chromium || true
+# Remove leftovers from the first K.OS version
+rm -f "${AUTOSTART_DIR}/kos-steam-bigpicture.desktop"
+rm -f "${HOME}/.config/kos-initialized"
 
-# On NVIDIA desktop mode, auto-launch Steam Big Picture fullscreen at login
-if grep -q "KOS_SESSION_MODE=nvidia-desktop" /etc/environment 2>/dev/null || [ ! -f /usr/bin/gamescope-session ]; then
-    cat << 'EOF' > "${HOME}/.config/autostart/kos-steam-bigpicture.desktop"
+write_launcher() {
+    # $1 file name, $2 display name, $3 command, $4 icon, $5 categories
+    cat > "${APPS_DIR}/$1" << EOF
 [Desktop Entry]
 Type=Application
-Name=K.OS Console Mode
-Exec=steam -gamepadui
-Icon=steam
-X-GNOME-Autostart-enabled=true
+Name=$2
+Exec=$3
+Icon=$4
+Terminal=false
+Categories=$5
 EOF
+}
+
+write_launcher kos-windows.desktop  "Switch to Windows" "/usr/bin/kos-boot-windows" "computer" "System;"
+write_launcher kos-gamepass.desktop "Xbox Game Pass"    "/usr/bin/kos-webapp app https://www.xbox.com/play gamepass" "input-gaming" "Game;"
+write_launcher kos-netflix.desktop  "Netflix"           "/usr/bin/kos-webapp app https://www.netflix.com netflix" "video-television" "AudioVideo;"
+write_launcher kos-hbo.desktop      "HBO Max"           "/usr/bin/kos-webapp app https://www.hbomax.com hbomax" "video-television" "AudioVideo;"
+write_launcher kos-browser.desktop  "Web Browser"       "/usr/bin/kos-webapp browser https://www.google.com browser" "web-browser" "Network;WebBrowser;"
+
+if [ "${KOS_SESSION_MODE}" = "nvidia-desktop" ]; then
+    # Only K.OS should start Steam at login. This hides any other Steam
+    # autostart entry so Steam is not started twice.
+    cat > "${AUTOSTART_DIR}/steam.desktop" << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Steam
+Exec=steam -silent
+Hidden=true
+EOF
+
+    # A console should never show a lock screen asking for a password
+    if command -v kwriteconfig6 >/dev/null 2>&1; then
+        kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock false
+        kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false
+    fi
 fi
 
-# Create desktop launcher files for K.OS apps so Steam and KDE both see them
-mkdir -p "${HOME}/.local/share/applications"
-
-cat << 'EOF' > "${HOME}/.local/share/applications/kos-windows.desktop"
-[Desktop Entry]
-Type=Application
-Name=Switch to Windows
-Comment=Reboot once into Windows for Valorant, League of Legends, and native Game Pass
-Exec=/usr/bin/kos-boot-windows
-Icon=computer
-Categories=Game;System;
-EOF
-
-cat << 'EOF' > "${HOME}/.local/share/applications/kos-browser.desktop"
-[Desktop Entry]
-Type=Application
-Name=Web Browser
-Comment=Full Chromium Web Browser
-Exec=/usr/bin/kos-webapp browser https://www.google.com
-Icon=web-browser
-Categories=Network;WebBrowser;Game;
-EOF
-
-cat << 'EOF' > "${HOME}/.local/share/applications/kos-gamepass.desktop"
-[Desktop Entry]
-Type=Application
-Name=Xbox Game Pass
-Comment=Play Xbox Cloud Gaming in fullscreen
-Exec=/usr/bin/kos-webapp app https://www.xbox.com/play
-Icon=input-gaming
-Categories=Game;
-EOF
-
-cat << 'EOF' > "${HOME}/.local/share/applications/kos-netflix.desktop"
-[Desktop Entry]
-Type=Application
-Name=Netflix
-Comment=Watch Netflix in fullscreen
-Exec=/usr/bin/kos-webapp app https://www.netflix.com
-Icon=video-television
-Categories=AudioVideo;Game;
-EOF
-
-cat << 'EOF' > "${HOME}/.local/share/applications/kos-hbo.desktop"
-[Desktop Entry]
-Type=Application
-Name=HBO Max
-Comment=Watch HBO Max in fullscreen
-Exec=/usr/bin/kos-webapp app https://www.max.com
-Icon=video-television
-Categories=AudioVideo;Game;
-EOF
-
-chmod +x "${HOME}/.local/share/applications/"kos-*.desktop
-
-# Inject K.OS tiles into Steam shortcuts.vdf once a Steam user profile exists
-python3 - << 'PYEOF'
-import os, glob, struct, time
-
-def build_vdf_shortcuts(entries):
-    out = b'\x00shortcuts\x00'
-    for idx, item in enumerate(entries):
-        out += b'\x00' + str(idx).encode('utf-8') + b'\x00'
-        appid = item['appid']
-        out += b'\x02appid\x00' + struct.pack('<I', appid)
-        for k in ['AppName', 'Exe', 'StartDir', 'icon', 'ShortcutPath', 'LaunchOptions']:
-            out += b'\x01' + k.encode('utf-8') + b'\x00' + item.get(k, '').encode('utf-8') + b'\x00'
-        for k in ['IsHidden', 'AllowDesktopConfig', 'AllowOverlay', 'OpenVR', 'Devkit']:
-            val = item.get(k, 0)
-            out += b'\x02' + k.encode('utf-8') + b'\x00' + struct.pack('<I', val)
-        out += b'\x01DevkitGameID\x00\x00'
-        out += b'\x02DevkitOverrideAppID\x00' + struct.pack('<I', 0)
-        out += b'\x02LastPlayTime\x00' + struct.pack('<I', int(time.time()))
-        out += b'\x01FlatpakAppID\x00\x00'
-        out += b'\x00tags\x00\x00\x08'
-        out += b'\x08'
-    out += b'\x08\x08'
-    return out
-
-kos_apps = [
-    {"appid": 0x90000001, "AppName": "Switch to Windows", "Exe": '"/usr/bin/kos-boot-windows"', "StartDir": '"/usr/bin"', "AllowDesktopConfig": 1, "AllowOverlay": 1},
-    {"appid": 0x90000002, "AppName": "Xbox Game Pass", "Exe": '"/usr/bin/kos-webapp"', "StartDir": '"/usr/bin"', "LaunchOptions": "app https://www.xbox.com/play", "AllowDesktopConfig": 1, "AllowOverlay": 1},
-    {"appid": 0x90000003, "AppName": "Netflix", "Exe": '"/usr/bin/kos-webapp"', "StartDir": '"/usr/bin"', "LaunchOptions": "app https://www.netflix.com", "AllowDesktopConfig": 1, "AllowOverlay": 1},
-    {"appid": 0x90000004, "AppName": "HBO Max", "Exe": '"/usr/bin/kos-webapp"', "StartDir": '"/usr/bin"', "LaunchOptions": "app https://www.max.com", "AllowDesktopConfig": 1, "AllowOverlay": 1},
-    {"appid": 0x90000005, "AppName": "Web Browser", "Exe": '"/usr/bin/kos-webapp"', "StartDir": '"/usr/bin"', "LaunchOptions": "browser https://www.google.com", "AllowDesktopConfig": 1, "AllowOverlay": 1},
-]
-
-userdata_dirs = glob.glob(os.path.expanduser("~/.local/share/Steam/userdata/*/config"))
-for cfg_dir in userdata_dirs:
-    vdf_path = os.path.join(cfg_dir, "shortcuts.vdf")
-    if not os.path.exists(vdf_path):
-        with open(vdf_path, "wb") as f:
-            f.write(build_vdf_shortcuts(kos_apps))
-PYEOF
-
-touch "${MARKER_FILE}"
+exit 0

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# K.OS: install the browser used by the web tiles (Google Chrome from Flathub).
+# Runs as the system at every boot. If Chrome is already installed it only
+# re-applies the controller setting and exits. If the download fails (for
+# example Wi-Fi is not ready) it exits with an error and systemd retries later.
+set -uo pipefail
+
+APP="com.google.Chrome"
+
+if ! flatpak info --system "${APP}" >/dev/null 2>&1; then
+    flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || exit 1
+    flatpak install --system -y --noninteractive flathub "${APP}" || exit 1
+fi
+
+# Lets Chrome detect game controllers (needed for Xbox Cloud Gaming)
+flatpak override --system --filesystem=/run/udev:ro "${APP}" || true
+
+exit 0

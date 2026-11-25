@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""K.OS: add the K.OS tiles to Steam's list of non-Steam games.
+
+Safe rules:
+  * Only runs while Steam is closed (Steam rewrites this file when it exits).
+  * Keeps every non-Steam game you added yourself.
+  * Only writes the file when something actually changed, and keeps a backup
+    named shortcuts.vdf.kos-backup next to it.
+  * Each tile gets the same ID Steam itself would give it, so your controller
+    layouts and artwork for a tile are kept across updates.
+"""
+import glob
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import zlib
+
+KOS_TILES = [
+    ("Switch to Windows", "/usr/bin/kos-boot-windows", ""),
+    ("Xbox Game Pass", "/usr/bin/kos-webapp", "app https://www.xbox.com/play gamepass"),
+    ("Netflix", "/usr/bin/kos-webapp", "app https://www.netflix.com netflix"),
+    ("HBO Max", "/usr/bin/kos-webapp", "app https://www.hbomax.com hbomax"),
+    ("Web Browser", "/usr/bin/kos-webapp", "browser https://www.google.com browser"),
+]
+
+# Binary VDF field types used by shortcuts.vdf
+T_MAP, T_STR, T_INT, T_FLOAT, T_U64, T_END = 0x00, 0x01, 0x02, 0x03, 0x07, 0x08
+
+
+def read_cstr(data, i):
+    end = data.index(b"\x00", i)
+    return data[i:end].decode("utf-8", "surrogateescape"), end + 1
+
+
+def parse_map(data, i):
+    out = {}
+    while True:
+        t = data[i]
+        i += 1
+        if t == T_END:
+            return out, i
+        key, i = read_cstr(data, i)
+        if t == T_MAP:
+            val, i = parse_map(data, i)
+        elif t == T_STR:
+            val, i = read_cstr(data, i)
+        elif t == T_INT:
+            val = struct.unpack_from("<i", data, i)[0]
+            i += 4
+        elif t == T_FLOAT:
+            val = struct.unpack_from("<f", data, i)[0]
+            i += 4
+        elif t == T_U64:
+            val = struct.unpack_from("<Q", data, i)[0]
+            i += 8
+        else:
+            raise ValueError("unknown field type %d at byte %d" % (t, i - 1))
+        out[key] = (t, val)
+
+
+def dump_map(m):
+    out = bytearray()
+    for key, (t, val) in m.items():
+        out.append(t)
+        out += key.encode("utf-8", "surrogateescape") + b"\x00"
+        if t == T_MAP:
+            out += dump_map(val)
+        elif t == T_STR:
+            out += val.encode("utf-8", "surrogateescape") + b"\x00"
+        elif t == T_INT:
+            out += struct.pack("<i", val)
+        elif t == T_FLOAT:
+            out += struct.pack("<f", val)
+        elif t == T_U64:
+            out += struct.pack("<Q", val)
+    out.append(T_END)
+    return bytes(out)
+
+
+def steam_shortcut_id(exe, name):
+    """Same ID Steam computes for a non-Steam game, as a signed 32-bit number."""
+    unsigned = (zlib.crc32((exe + name).encode("utf-8")) & 0xFFFFFFFF) | 0x80000000
+    return struct.unpack("<i", struct.pack("<I", unsigned))[0]
+
+
+def new_entry(name, exe_q, start_q, opts, appid):
+    return {
+        "appid": (T_INT, appid),
+        "AppName": (T_STR, name),
+        "Exe": (T_STR, exe_q),
+        "StartDir": (T_STR, start_q),
+        "icon": (T_STR, ""),
+        "ShortcutPath": (T_STR, ""),
+        "LaunchOptions": (T_STR, opts),
+        "IsHidden": (T_INT, 0),
+        "AllowDesktopConfig": (T_INT, 1),
+        "AllowOverlay": (T_INT, 1),
+        "OpenVR": (T_INT, 0),
+        "Devkit": (T_INT, 0),
+        "DevkitGameID": (T_STR, ""),
+        "DevkitOverrideAppID": (T_INT, 0),
+        "LastPlayTime": (T_INT, 0),
+        "FlatpakAppID": (T_STR, ""),
+        "tags": (T_MAP, {"0": (T_STR, "K.OS")}),
+    }
+
+
+def apply_tiles(shortcuts):
+    """Return a new ordered shortcuts map with the K.OS tiles added or refreshed."""
+    entries = [v for _, (t, v) in shortcuts.items() if t == T_MAP]
+    by_name = {}
+    for e in entries:
+        name = e.get("AppName", (T_STR, ""))[1]
+        by_name.setdefault(name, e)
+    for name, exe, opts in KOS_TILES:
+        exe_q = '"%s"' % exe
+        start_q = '"%s"' % os.path.dirname(exe)
+        appid = steam_shortcut_id(exe_q, name)
+        e = by_name.get(name)
+        if e is None:
+            entries.append(new_entry(name, exe_q, start_q, opts, appid))
+        else:
+            e["appid"] = (T_INT, appid)
+            e["Exe"] = (T_STR, exe_q)
+            e["StartDir"] = (T_STR, start_q)
+            e["LaunchOptions"] = (T_STR, opts)
+    return {str(i): (T_MAP, e) for i, e in enumerate(entries)}
+
+
+def process_file(path):
+    root = {"shortcuts": (T_MAP, {})}
+    original = b""
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            original = f.read()
+        if original:
+            root, _ = parse_map(original, 0)
+            if "shortcuts" not in root:
+                root["shortcuts"] = (T_MAP, {})
+    root["shortcuts"] = (T_MAP, apply_tiles(root["shortcuts"][1]))
+    new_data = dump_map(root)
+    if new_data == original:
+        return False
+    if original:
+        shutil.copy2(path, path + ".kos-backup")
+    tmp = path + ".kos-tmp"
+    with open(tmp, "wb") as f:
+        f.write(new_data)
+    os.replace(tmp, path)
+    return True
+
+
+def steam_running():
+    return subprocess.run(["pgrep", "-x", "steam"], capture_output=True).returncode == 0
+
+
+def main():
+    if steam_running() and "--force" not in sys.argv:
+        print("Steam is running, skipping (tiles are added at the next login).")
+        return 0
+    steam_roots = [
+        os.path.expanduser("~/.local/share/Steam"),
+        os.path.expanduser("~/.steam/steam"),
+    ]
+    seen = set()
+    found = False
+    for root in steam_roots:
+        for user_dir in glob.glob(os.path.join(root, "userdata", "*")):
+            user_id = os.path.basename(user_dir)
+            if not user_id.isdigit() or user_id == "0":
+                continue
+            real = os.path.realpath(user_dir)
+            if real in seen:
+                continue
+            seen.add(real)
+            found = True
+            cfg = os.path.join(user_dir, "config")
+            os.makedirs(cfg, exist_ok=True)
+            path = os.path.join(cfg, "shortcuts.vdf")
+            try:
+                changed = process_file(path)
+                print("%s: %s" % (path, "K.OS tiles updated" if changed else "already up to date"))
+            except Exception as err:  # never break login because of one bad file
+                print("%s: skipped (%s)" % (path, err), file=sys.stderr)
+    if not found:
+        print("No Steam account found yet. Sign in to Steam, then restart.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

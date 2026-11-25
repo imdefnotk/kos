@@ -1,0 +1,12 @@
+[Unit]
+Description=K.OS system setup (automatic login and Windows-friendly clock)
+Before=display-manager.service sddm.service plasmalogin.service
+After=dbus.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kos-system-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

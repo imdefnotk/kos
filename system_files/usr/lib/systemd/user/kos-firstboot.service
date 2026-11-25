@@ -1,10 +1,12 @@
+# K.OS per-user setup for the AMD (Gaming Mode) flavor only.
+# The NVIDIA flavor runs the same setup from kos-session instead.
 [Unit]
-Description=K.OS First Boot User Environment Setup
-After=graphical-session.target
+Description=K.OS user setup (launchers and Steam tiles)
 
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/kos-firstboot-setup
+ExecStart=/usr/libexec/kos-steam-shortcuts
 RemainAfterExit=yes
 
 [Install]
