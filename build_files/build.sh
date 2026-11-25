@@ -8,6 +8,10 @@ KOS_SESSION_MODE="${KOS_SESSION_MODE:-nvidia-desktop}"
 
 echo "Building K.OS target: ${KOS_TARGET} (${KOS_SESSION_MODE})"
 
+# 0. Extra packages: python3-evdev lets kos-remote turn the controller into a TV remote
+dnf5 -y install python3-evdev || dnf -y install python3-evdev
+python3 -c "import evdev"
+
 # 1. Make every K.OS program runnable (Git on Windows does not keep this setting)
 chmod 0755 /usr/bin/kos-* /usr/libexec/kos-*
 

@@ -1,0 +1,19 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "K.OS"
+            }
+        ],
+        "Category": "Window Management",
+        "Description": "While K.OS Home is open, games and apps open full screen, on the K.OS Home screen, in front.",
+        "EnabledByDefault": true,
+        "Id": "kos-console",
+        "License": "MIT",
+        "Name": "K.OS Console",
+        "Version": "1.0"
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js"
+}

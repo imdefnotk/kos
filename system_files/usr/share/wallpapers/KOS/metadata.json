@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "K.OS"
+            }
+        ],
+        "Id": "KOS",
+        "License": "All rights reserved",
+        "Name": "K.OS"
+    }
+}

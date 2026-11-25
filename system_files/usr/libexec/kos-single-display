@@ -1,0 +1,67 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+K.OS uses one screen, like a game console. Both monitors are only for Windows.
+
+Keeps the main display on (the one KDE marks as primary, priority 1) and
+turns every other connected display off. Runs at login and when K.OS Home opens.
+Safe to run again and again: if only one display is on, it does nothing.
+
+Owner escape hatch: create ~/.config/kos-desktop-mode to keep all displays.
+Check what it would do without changing anything:  kos-single-display --dry-run
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+
+def outputs():
+    out = subprocess.run(["kscreen-doctor", "--json"], capture_output=True, text=True, timeout=10)
+    data = json.loads(out.stdout or "{}")
+    return [o for o in data.get("outputs", []) if o.get("connected")]
+
+
+def area(o):
+    for m in o.get("modes", []):
+        if str(m.get("id")) == str(o.get("currentModeId")):
+            size = m.get("size") or {}
+            return size.get("width", 0) * size.get("height", 0)
+    return 0
+
+
+def main():
+    dry = "--dry-run" in sys.argv
+    if os.path.exists(os.path.expanduser("~/.config/kos-desktop-mode")) and not dry:
+        return 0
+    if not shutil.which("kscreen-doctor"):
+        print("kscreen-doctor not found", file=sys.stderr)
+        return 0
+    try:
+        outs = outputs()
+    except (OSError, ValueError, subprocess.SubprocessError) as err:
+        print("cannot read displays: %s" % err, file=sys.stderr)
+        return 0
+    enabled = [o for o in outs if o.get("enabled")]
+    if len(enabled) <= 1:
+        print("one display on: nothing to do")
+        return 0
+
+    # Main display: KDE primary (priority 1), else the biggest one
+    def rank(o):
+        prio = o.get("priority") or 99
+        return (prio, -area(o))
+    keep = sorted(enabled, key=rank)[0]
+    others = [o for o in enabled if o is not keep]
+    print("keeping: %s" % keep.get("name"))
+    args = ["kscreen-doctor"] + ["output.%s.disable" % o.get("name") for o in others]
+    print("turning off: %s" % ", ".join(o.get("name", "?") for o in others))
+    if not dry:
+        subprocess.run(args, timeout=20)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1048,6 +1048,15 @@
         var s = padState(p);
         KEYS.forEach(function (k) { now[k] = now[k] || s[k]; });
       });
+      // Another window (a game, Netflix) is in front: ignore the controller here,
+      // otherwise K.OS Home would move behind it.
+      if (!document.hasFocus()) {
+        prev = now;
+        hold.dir = null;
+        if (diag.on) { drawDiag(pads, now); }
+        requestAnimationFrame(poll);
+        return;
+      }
       ['a', 'b', 'y', 'lb', 'rb', 'menu'].forEach(function (k) { if (now[k] && !prev[k]) { press(k); } });
       var dir = now.up ? 'up' : now.down ? 'down' : now.left ? 'left' : now.right ? 'right' : null;
       if (dir) {

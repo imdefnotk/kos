@@ -1,0 +1,295 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+K.OS remote mode.
+
+Netflix, HBO Max and the Internet tile are web sites, and web sites do not
+understand game controllers. While one of them is open, this program turns
+the controller into a TV remote with a pointer:
+
+  Left stick     move the pointer
+  A              click
+  B              back (tap)  /  close the app (hold 1 second)
+  X or Y         play / pause (space)
+  D-pad          arrow keys (seek and volume in the video player)
+  Right stick    scroll
+  LB / RB        previous / next item (Shift+Tab / Tab)
+  Menu (Start)   Enter
+  View (Back)    Escape (leave full-screen video)
+  R3 (press RS)  right click
+
+It is started by kos-webapp and stops by itself when that app closes.
+Xbox Bulut Oyun does not use it, because cloud games need the real controller.
+
+Usage: kos-remote --parent <pid>
+"""
+
+import argparse
+import fcntl
+import logging
+import os
+import select
+import sys
+import time
+
+try:
+    import evdev
+    from evdev import UInput, ecodes as e
+except ImportError:  # the image installs python3-evdev; without it, do nothing
+    print("kos-remote: python3-evdev is not installed", file=sys.stderr)
+    sys.exit(0)
+
+log = logging.getLogger("kos-remote")
+
+DEVICE_NAME = "K.OS Remote"
+TICK = 1.0 / 125          # 125 updates per second
+DEADZONE = 0.18
+POINTER_SPEED = 1500.0    # pixels per second at full stick
+SCROLL_SPEED = 14.0       # wheel steps per second at full stick
+HOLD_CLOSE = 1.0          # seconds to hold B to close the app
+REPEAT_DELAY = 0.40
+REPEAT_RATE = 0.09
+
+BTN_X_CODES = {e.BTN_NORTH, e.BTN_WEST}   # X and Y (drivers disagree on which is which)
+
+OUT_KEYS = [
+    e.KEY_UP, e.KEY_DOWN, e.KEY_LEFT, e.KEY_RIGHT, e.KEY_ENTER, e.KEY_ESC, e.KEY_SPACE,
+    e.KEY_TAB, e.KEY_LEFTSHIFT, e.KEY_LEFTALT, e.KEY_F4,
+    e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE,
+]
+OUT_REL = [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL]
+
+DPAD_BUTTONS = {
+    e.BTN_DPAD_UP: "up", e.BTN_DPAD_DOWN: "down", e.BTN_DPAD_LEFT: "left", e.BTN_DPAD_RIGHT: "right",
+}
+ARROWS = {"up": e.KEY_UP, "down": e.KEY_DOWN, "left": e.KEY_LEFT, "right": e.KEY_RIGHT}
+
+
+class Remote:
+    """Turns controller events into keyboard and mouse actions. `out` is the virtual device."""
+
+    def __init__(self, out, clock=time.monotonic):
+        self.out = out
+        self.clock = clock
+        self.axes = {}            # (device, code) -> -1.0 .. 1.0
+        self.dpad = {}            # direction -> pressed
+        self.repeat_dir = None
+        self.repeat_next = 0.0
+        self.b_down_at = None
+        self.b_closed = False
+        self.carry = [0.0, 0.0, 0.0, 0.0]  # pointer x, y, wheel, hwheel leftovers
+
+    # ---- helpers
+    def tap(self, *keys):
+        for k in keys:
+            self.out.write(e.EV_KEY, k, 1)
+        for k in reversed(keys):
+            self.out.write(e.EV_KEY, k, 0)
+        self.out.syn()
+
+    def key(self, k, value):
+        self.out.write(e.EV_KEY, k, value)
+        self.out.syn()
+
+    def set_dpad(self, direction, pressed):
+        if self.dpad.get(direction) == pressed:
+            return
+        self.dpad[direction] = pressed
+        if pressed:
+            self.tap(ARROWS[direction])
+            self.repeat_dir = direction
+            self.repeat_next = self.clock() + REPEAT_DELAY
+        elif self.repeat_dir == direction:
+            self.repeat_dir = None
+
+    # ---- input
+    def axis(self, dev_id, code, value, lo, hi):
+        mid = (lo + hi) / 2.0
+        half = max(1.0, (hi - lo) / 2.0)
+        v = max(-1.0, min(1.0, (value - mid) / half))
+        if code in (e.ABS_HAT0X, e.ABS_HAT0Y):
+            v = float(value)
+            if code == e.ABS_HAT0X:
+                self.set_dpad("left", v < 0)
+                self.set_dpad("right", v > 0)
+            else:
+                self.set_dpad("up", v < 0)
+                self.set_dpad("down", v > 0)
+            return
+        self.axes[(dev_id, code)] = v
+
+    def button(self, code, value):
+        down = value != 0
+        if code in DPAD_BUTTONS:
+            self.set_dpad(DPAD_BUTTONS[code], down)
+            return
+        if value == 2:  # key repeat from the driver
+            return
+        if code == e.BTN_SOUTH:
+            self.key(e.BTN_LEFT, 1 if down else 0)
+        elif code == e.BTN_EAST:
+            if down:
+                self.b_down_at = self.clock()
+                self.b_closed = False
+            else:
+                if self.b_down_at is not None and not self.b_closed:
+                    self.tap(e.KEY_LEFTALT, e.KEY_LEFT)       # browser back
+                self.b_down_at = None
+        elif code in BTN_X_CODES:
+            if down:
+                self.tap(e.KEY_SPACE)
+        elif code == e.BTN_TL:
+            if down:
+                self.tap(e.KEY_LEFTSHIFT, e.KEY_TAB)
+        elif code == e.BTN_TR:
+            if down:
+                self.tap(e.KEY_TAB)
+        elif code == e.BTN_START:
+            if down:
+                self.tap(e.KEY_ENTER)
+        elif code == e.BTN_SELECT:
+            if down:
+                self.tap(e.KEY_ESC)
+        elif code == e.BTN_THUMBR:
+            self.key(e.BTN_RIGHT, 1 if down else 0)
+
+    # ---- time based actions (pointer, scroll, repeat, hold B)
+    def stick(self, code):
+        vals = [v for (dev, c), v in self.axes.items() if c == code]
+        best = max(vals, key=abs) if vals else 0.0
+        mag = abs(best)
+        if mag < DEADZONE:
+            return 0.0
+        scaled = (mag - DEADZONE) / (1.0 - DEADZONE)
+        return (scaled * scaled) * (1 if best > 0 else -1)
+
+    def tick(self, dt):
+        now = self.clock()
+        moved = False
+        for i, (code, rel, speed) in enumerate((
+            (e.ABS_X, e.REL_X, POINTER_SPEED),
+            (e.ABS_Y, e.REL_Y, POINTER_SPEED),
+            (e.ABS_RY, e.REL_WHEEL, -SCROLL_SPEED),
+            (e.ABS_RX, e.REL_HWHEEL, SCROLL_SPEED),
+        )):
+            s = self.stick(code)
+            if s == 0.0:
+                self.carry[i] = 0.0
+                continue
+            self.carry[i] += s * speed * dt
+            step = int(self.carry[i])
+            if step:
+                self.carry[i] -= step
+                self.out.write(e.EV_REL, rel, step)
+                moved = True
+        if moved:
+            self.out.syn()
+        if self.repeat_dir and self.dpad.get(self.repeat_dir) and now >= self.repeat_next:
+            self.tap(ARROWS[self.repeat_dir])
+            self.repeat_next = now + REPEAT_RATE
+        if self.b_down_at is not None and not self.b_closed and now - self.b_down_at >= HOLD_CLOSE:
+            self.b_closed = True
+            self.tap(e.KEY_LEFTALT, e.KEY_F4)                 # close the app window
+
+
+def is_controller(dev):
+    if dev.name == DEVICE_NAME:
+        return False
+    caps = dev.capabilities()
+    keys = set(caps.get(e.EV_KEY, []))
+    abs_codes = {c if isinstance(c, int) else c[0] for c in caps.get(e.EV_ABS, [])}
+    return e.BTN_SOUTH in keys and e.ABS_X in abs_codes and e.ABS_Y in abs_codes
+
+
+def scan(known):
+    found = {}
+    for path in evdev.list_devices():
+        if path in known:
+            continue
+        try:
+            dev = evdev.InputDevice(path)
+        except OSError:
+            continue
+        if is_controller(dev):
+            found[path] = dev
+            log.info("controller: %s (%s)", dev.name, path)
+        else:
+            dev.close()
+    return found
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def main():
+    ap = argparse.ArgumentParser(description="K.OS remote mode")
+    ap.add_argument("--parent", type=int, required=True, help="stop when this process ends")
+    args = ap.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+
+    # Only one remote at a time, otherwise every press would count twice
+    lock_path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "kos-remote.lock")
+    lock = open(lock_path, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log.info("another K.OS remote is already running")
+        return 0
+
+    try:
+        out = UInput({e.EV_KEY: OUT_KEYS, e.EV_REL: OUT_REL}, name=DEVICE_NAME)
+    except (OSError, evdev.UInputError) as err:
+        log.error("cannot create the virtual keyboard and mouse: %s", err)
+        return 1
+
+    remote = Remote(out)
+    devices = {}
+    absinfo = {}
+    last_scan = 0.0
+    last = time.monotonic()
+    log.info("K.OS remote running for process %d", args.parent)
+    try:
+        while alive(args.parent):
+            now = time.monotonic()
+            if now - last_scan > 2.0:
+                for path, dev in scan(devices).items():
+                    devices[path] = dev
+                    for code, info in dev.capabilities().get(e.EV_ABS, []):
+                        absinfo[(path, code)] = (info.min, info.max)
+                last_scan = now
+            fds = {dev.fd: path for path, dev in devices.items()}
+            ready = select.select(list(fds), [], [], TICK)[0] if fds else (time.sleep(TICK) or [])
+            for fd in ready:
+                path = fds[fd]
+                try:
+                    for ev in devices[path].read():
+                        if ev.type == e.EV_KEY:
+                            remote.button(ev.code, ev.value)
+                        elif ev.type == e.EV_ABS:
+                            lo, hi = absinfo.get((path, ev.code), (-32768, 32767))
+                            remote.axis(path, ev.code, ev.value, lo, hi)
+                except OSError:  # controller turned off or disconnected
+                    log.info("controller gone: %s", path)
+                    devices.pop(path).close()
+                    for k in [k for k in remote.axes if k[0] == path]:
+                        remote.axes.pop(k)
+            now = time.monotonic()
+            remote.tick(now - last)
+            last = now
+    finally:
+        out.close()
+        for dev in devices.values():
+            dev.close()
+    log.info("app closed, K.OS remote stopped")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

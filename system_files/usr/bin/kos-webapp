@@ -31,6 +31,13 @@ fi
 PROFILE_DIR="${HOME}/.var/app/${BROWSER_ID}/kos-profiles/${PROFILE}"
 mkdir -p "${PROFILE_DIR}"
 
+# Controller as a TV remote with a pointer (see /usr/libexec/kos-remote).
+# Not for Xbox Bulut Oyun: cloud games need the real controller.
+# $$ stays the same process after "exec" below, so the remote stops when the app closes.
+if [ "${PROFILE}" != "gamepass" ] && [ -x /usr/libexec/kos-remote ]; then
+    /usr/libexec/kos-remote --parent $$ >"${XDG_RUNTIME_DIR:-/tmp}/kos-remote.log" 2>&1 &
+fi
+
 FLAGS=(
     "--user-data-dir=${PROFILE_DIR}"
     "--no-first-run"

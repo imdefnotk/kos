@@ -3,6 +3,7 @@
 # Part 1 (no admin needed):
 #   Creates the "Return to K.OS" shortcut on the Desktop and in the Start menu.
 #   It asks "Restart into K.OS now?" and then restarts the PC.
+#   Sets the K.OS Windows wallpaper, and sets it again at every sign-in.
 #
 # How to run: double-click kos-windows-setup.cmd in the same folder.
 # After the shortcuts are made, it asks Windows for admin permission and then:
@@ -35,6 +36,31 @@ $answer = [System.Windows.MessageBox]::Show("Restart into K.OS now?`n`nSave your
 if ($answer -eq "Yes") { shutdown.exe /r /t 0 }
 '@
     Set-Content -Path $returnScript -Value $body -Encoding ASCII
+
+    # K.OS Windows wallpaper: copied next to the K.OS files, applied now and at every sign-in
+    $wallSource = Join-Path $PSScriptRoot '..\art\KOS-Windows-Wallpaper-4K.png'
+    if (-not (Test-Path $wallSource)) { $wallSource = Join-Path $PSScriptRoot 'KOS-Windows-Wallpaper-4K.png' }
+    if (Test-Path $wallSource) {
+        $wallFile = Join-Path $kosDir 'KOS-Windows-Wallpaper-4K.png'
+        Copy-Item -Path $wallSource -Destination $wallFile -Force
+        $applyScript = Join-Path $kosDir 'Apply-Wallpaper.ps1'
+        $applyBody = @'
+$wall = Join-Path $env:LOCALAPPDATA 'KOS\KOS-Windows-Wallpaper-4K.png'
+if (Test-Path $wall) {
+    Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value '10'
+    Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name TileWallpaper -Value '0'
+    Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class KosWall { [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int SystemParametersInfo(int a, int b, string c, int d); }'
+    [KosWall]::SystemParametersInfo(20, 0, $wall, 3) | Out-Null
+}
+'@
+        Set-Content -Path $applyScript -Value $applyBody -Encoding ASCII
+        $runCmd = "`"$(Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$applyScript`""
+        Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'KOS Wallpaper' -Value $runCmd
+        & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $applyScript
+        Write-Host 'Wallpaper: K.OS (set again at every sign-in)'
+    } else {
+        Write-Host 'Wallpaper: KOS-Windows-Wallpaper-4K.png not found, skipped'
+    }
 
     $shell = New-Object -ComObject WScript.Shell
     $desktop = [Environment]::GetFolderPath('Desktop')

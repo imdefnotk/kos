@@ -18,6 +18,16 @@ if [ "${1:-}" = "--list" ]; then
     exec python3 "${HELPER}" --list
 fi
 
+# Only one K.OS Home at a time. The lock stays held while K.OS Home is open
+# (the browser below inherits it), so extra clicks do nothing.
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/kos-home.lock"
+if ! flock -n 9; then
+    exit 0
+fi
+
+# One screen, like a console (both monitors only on Windows)
+/usr/libexec/kos-single-display >/dev/null 2>&1 || true
+
 ping_helper() {
     curl -fs -m 1 "${URL}api/ping" 2>/dev/null | grep -q '"kos-home"'
 }
@@ -43,7 +53,8 @@ show_error() {
 }
 
 if ! ping_helper; then
-    nohup python3 "${HELPER}" --port "${PORT}" --root "${HOME_DIR}" >"${LOG}" 2>&1 &
+    # 9>&- : the helper keeps running in the background, so it must not hold the lock
+    nohup python3 "${HELPER}" --port "${PORT}" --root "${HOME_DIR}" >"${LOG}" 2>&1 9>&- &
     for _ in $(seq 1 40); do
         ping_helper && break
         sleep 0.25

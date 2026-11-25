@@ -7,4 +7,5 @@ Comment[tr]=K.OS konsol ana ekranı
 Exec=/usr/bin/kos-home
 Icon=applications-games
 Terminal=false
+StartupNotify=true
 Categories=Game;

@@ -59,6 +59,20 @@ EOF
     if command -v kwriteconfig6 >/dev/null 2>&1; then
         kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock false
         kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false
+
+        # K.OS Console window rules: while K.OS Home is open, games open full screen,
+        # on the K.OS Home screen, in front (/usr/share/kwin/scripts/kos-console)
+        kwriteconfig6 --file kwinrc --group Plugins --key kos-consoleEnabled true
+        dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure >/dev/null 2>&1 || true
+    fi
+
+    # One screen, like a console (both monitors only on Windows)
+    /usr/libexec/kos-single-display || true
+
+    # K.OS wallpaper, set at every login (the desktop should always look like K.OS)
+    KOS_WALLPAPER=/usr/share/wallpapers/KOS/contents/images/3840x2160.png
+    if [ -f "${KOS_WALLPAPER}" ] && command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
+        plasma-apply-wallpaperimage "${KOS_WALLPAPER}" >/dev/null 2>&1 || true
     fi
 fi
 
