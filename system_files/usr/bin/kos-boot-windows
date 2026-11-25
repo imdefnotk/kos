@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Locate the Windows Boot Manager EFI entry ID (e.g., 0000, 0001)
+WIN_BOOT_ID=$(pkexec efibootmgr | grep -i "Windows Boot Manager" | head -n 1 | sed -E 's/^Boot([0-9A-Fa-f]{4}).*/\1/')
+
+if [ -z "${WIN_BOOT_ID}" ]; then
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --title="K.OS - Windows Not Found" --text="Could not find Windows Boot Manager in UEFI entries. Make sure Windows is installed on an EFI partition."
+    else
+        echo "Error: Windows Boot Manager EFI entry not found."
+    fi
+    exit 1
+fi
+
+# Set one-time next boot to Windows (restarting Windows afterwards returns to K.OS)
+pkexec efibootmgr --bootnext "${WIN_BOOT_ID}"
+systemctl reboot

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-browser}"
+URL="${2:-https://www.google.com}"
+
+# Ensure Chromium Flatpak is installed if not yet present
+if ! flatpak info org.chromium.Chromium >/dev/null 2>&1; then
+    flatpak install -y --noninteractive flathub org.chromium.Chromium
+fi
+
+COMMON_FLAGS=(
+    "--enable-features=UseOzonePlatform"
+    "--ozone-platform-hint=auto"
+    "--enable-gamepad-extensions"
+    "--start-fullscreen"
+    "--no-first-run"
+)
+
+if [ "${MODE}" = "app" ]; then
+    exec flatpak run org.chromium.Chromium "${COMMON_FLAGS[@]}" --app="${URL}"
+else
+    exec flatpak run org.chromium.Chromium "${COMMON_FLAGS[@]}" "${URL}"
+fi

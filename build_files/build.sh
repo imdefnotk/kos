@@ -1,27 +1,34 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 set -ouex pipefail
 
-# Copy the contents of system_files/ of the git repo to /
-cp -avf "/ctx/system_files"/. /
+echo "Building K.OS target: ${KOS_TARGET} (${KOS_SESSION_MODE})"
 
-### Install packages
+# Ensure executable permissions on K.OS binaries and helpers
+chmod +x /usr/bin/kos-*
+chmod +x /usr/libexec/kos-*
 
-# Packages can be installed from any enabled yum repo on the image.
-# RPMfusion repos are available by default in ublue main images
-# List of rpmfusion packages can be found here:
-# https://mirrors.rpmfusion.org/mirrorlist?path=free/fedora/updates/43/x86_64/repoview/index.html&protocol=https&redirect=1
+# Install python3-vdf or ensure python3 is present for Steam shortcuts injection
+rpm-ostree install python3 || true
 
-# this installs a package from fedora repos
-dnf5 install -y tmux
+# Hide GRUB menu for instant console boot
+if [ -f /etc/default/grub ]; then
+    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub
+    if ! grep -q "^GRUB_TIMEOUT_STYLE=" /etc/default/grub; then
+        echo "GRUB_TIMEOUT_STYLE=hidden" >> /etc/default/grub
+    fi
+fi
 
-# Use a COPR Example:
-#
-# dnf5 -y copr enable ublue-os/staging
-# dnf5 -y install package
-# Disable COPRs so they don't end up enabled on the final image:
-# dnf5 -y copr disable ublue-os/staging
+# Set OS branding identity
+if [ -f /usr/lib/os-release ]; then
+    sed -i 's/^PRETTY_NAME=.*/PRETTY_NAME="K.OS (Konsol OS)"/' /usr/lib/os-release
+    sed -i 's/^NAME=.*/NAME="K.OS"/' /usr/lib/os-release
+fi
 
-#### Example for enabling a System Unit File
+# Enable first-boot user setup service globally
+systemctl enable --global kos-firstboot.service
 
-systemctl enable podman.socket
+# Regenerate initramfs to pick up boot config changes
+QUALIFIED_KERNEL="$(rpm -qa | grep -P 'kernel-(|'"$KERNEL_FLAVOR"'-)(\d+\.\d+\.\d+)' | sed -E 's/kernel-(|'"$KERNEL_FLAVOR"'-)//' | head -n 1)"
+if [ -n "${QUALIFIED_KERNEL}" ]; then
+    /usr/bin/dracut --no-hostonly --kver "${QUALIFIED_KERNEL}" --reproducible -v --add ostree -f "/lib/modules/${QUALIFIED_KERNEL}/initramfs.img"
+fi

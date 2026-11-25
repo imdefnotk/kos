@@ -1,0 +1,11 @@
+[Unit]
+Description=K.OS First Boot User Environment Setup
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kos-firstboot-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
