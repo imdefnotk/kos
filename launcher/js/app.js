@@ -1,5 +1,5 @@
 /*
-  K.OS launcher, phase 1 prototype.
+  K.OS launcher (phase 2: real Steam games through the K.OS Home helper).
   Controls:
     Controller: D-pad or left stick to move, A to select, B to go back,
                 LB / RB to switch sections, Start or Menu button for the Power menu.
@@ -50,7 +50,8 @@
     textSize: saved.get('textSize', 'buyuk'),
     music: saved.get('music', true),
     musicLevel: saved.get('musicLevel', 'orta'),
-    uiSounds: saved.get('uiSounds', true)
+    uiSounds: saved.get('uiSounds', true),
+    gameArt: saved.get('gameArt', true)
   };
 
   /* ---------- Fit the 1920x1080 design to any window ---------- */
@@ -118,14 +119,174 @@
     })();
   }
   function loadDemoArt(after) {
-    var ids = D.apps.map(function (a) { return a.id; }).concat(D.games.map(function (g) { return g.id; }));
+    var sample = D.games.filter(function (g) { return !g.live; });
+    var ids = D.apps.map(function (a) { return a.id; })
+      .concat(sample.map(function (g) { return g.id; }))
+      .concat(sample.filter(function (g) { return g.steamAppId; }).map(function (g) { return g.id + '-hero'; }));
     var left = ids.length;
+    if (!left) { after(); return; }
     ids.forEach(function (id) {
       findDemoArt(id, function (src) {
         if (src) { demoArt[id] = src; }
         if (--left === 0) { after(); }
       });
     });
+  }
+
+  /* ---------- Real game library (phase 2) ----------
+     Opened through the K.OS Home helper (http://127.0.0.1:47800/), the launcher
+     gets the installed Steam games, play time and pictures from the drive, and
+     can start games. Opened as a plain file, the sample games stay. */
+
+  var live = { on: false, platform: null, games: false, sig: '' };
+  var base = { home: D.home.slice(), soon: D.games.filter(function (g) { return g.soon; }) };
+  var HOME_RECENT = 5;
+
+  function api(path, opts) {
+    opts = opts || {};
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, opts.timeout || 6000) : null;
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: opts.method === 'POST' ? { 'X-KOS': '1' } : {},
+      cache: 'no-store',
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function (r) {
+      if (timer) { clearTimeout(timer); }
+      return r.json();
+    });
+  }
+
+  function playedText(min) {
+    if (!min) { return 'Hiç oynanmadı'; }
+    if (min < 60) { return min + ' dakika oynandı'; }
+    return Math.round(min / 60) + ' saat oynandı';
+  }
+
+  function lastText(ts) {
+    if (!ts) { return 'Yeni'; }
+    var days = Math.floor((Date.now() - ts * 1000) / 86400000);
+    if (days <= 0) { return 'Son oynama: bugün'; }
+    if (days === 1) { return 'Son oynama: dün'; }
+    if (days < 7) { return 'Son oynama: ' + days + ' gün önce'; }
+    if (days < 30) { return 'Son oynama: ' + Math.floor(days / 7) + ' hafta önce'; }
+    try { return 'Son oynama: ' + new Date(ts * 1000).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' }); }
+    catch (e) { return ''; }
+  }
+
+  function sizeText(bytes) {
+    var gb = (bytes || 0) / 1e9;
+    if (gb < 0.1) { return ''; }
+    return (gb < 10 ? gb.toFixed(1) : String(Math.round(gb))).replace('.', ',') + ' GB';
+  }
+
+  function applyLibrary(lib) {
+    var real = lib.games.map(function (s) {
+      return {
+        id: 'steam-' + s.appid, steamAppId: s.appid, live: true,
+        name: s.name, short: esc(s.name),
+        played: playedText(s.playtimeMin),
+        save: s.updating ? 'Güncelleniyor' : lastText(s.lastPlayed),
+        progress: sizeText(s.sizeBytes),
+        achievement: null, friend: null, bg: '#1F1F23', art: '',
+        img: '/api/art/' + s.appid + '/portrait'
+      };
+    });
+    D.games = real.concat(base.soon);
+    var keep = base.home.filter(function (k) {
+      return k === 'library' || k.indexOf('app:') === 0 || base.soon.some(function (g) { return g.id === k; });
+    });
+    D.home = real.slice(0, HOME_RECENT).map(function (g) { return g.id; }).concat(keep);
+    D.gamesNote = 'Steam\'deki yüklü oyunların: ' + real.length;
+    live.games = true;
+    live.sig = lib.games.map(function (g) { return g.appid + ':' + g.lastPlayed + ':' + g.updating; }).join(',');
+  }
+
+  function loadLibrary(done) {
+    if (location.protocol !== 'http:') { done(); return; }
+    api('/api/ping', { timeout: 2000 }).then(function (p) {
+      if (!p || p.app !== 'kos-home') { throw new Error('not kos-home'); }
+      live.on = true;
+      live.platform = p.platform;
+      setInterval(function () { api('/api/ping').catch(function () { /* helper gone */ }); }, 30000);
+      return api('/api/library');
+    }).then(function (lib) {
+      if (lib && lib.games && lib.games.length) { applyLibrary(lib); }
+      else if (lib) {
+        D.gamesNote = lib.steamFound ? 'Steam\'de yüklü oyun yok. Örnek oyunlar gösteriliyor.' : 'Steam bulunamadı. Örnek oyunlar gösteriliyor.';
+      }
+      done();
+    }).catch(function () { done(); });
+  }
+
+  /* After a game closes or Steam installs something, show the new order. */
+  var refreshing = false;
+  function refreshLibrary() {
+    if (!live.games || refreshing) { return; }
+    refreshing = true;
+    api('/api/library').then(function (lib) {
+      refreshing = false;
+      if (!lib || !lib.games || !lib.games.length) { return; }
+      var sig = lib.games.map(function (g) { return g.appid + ':' + g.lastPlayed + ':' + g.updating; }).join(',');
+      if (sig === live.sig || state.overlay) { return; }
+      var wasHome = state.screen === 'home';
+      applyLibrary(lib);
+      renderHome();
+      renderGames();
+      if (wasHome) { setFocus($('#homeRow .tile')); }
+    }).catch(function () { refreshing = false; });
+  }
+
+  /* A picture that fails to load falls back to the K.OS tile design. */
+  document.addEventListener('error', function (e) {
+    var img = e.target;
+    if (img && img.classList && img.classList.contains('tile-img')) {
+      var tile = img.closest('.tile');
+      if (tile) { tile.classList.remove('has-image'); }
+      img.remove();
+    }
+  }, true);
+
+  /* ---------- Game picture behind the Home screen (PS5 style) ---------- */
+
+  var STEAM_CDN = 'https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/';
+  var heroBg = { index: 0, src: null, timer: null };
+
+  function heroArtFor(key) {
+    if (!prefs.gameArt || !key || key === 'library' || key.indexOf('app:') === 0) { return null; }
+    var g = game(key);
+    if (!g || !g.steamAppId) { return null; }
+    if (demoArt[g.id + '-hero']) { return demoArt[g.id + '-hero']; }
+    if (g.live) { return '/api/art/' + g.steamAppId + '/hero'; }
+    return state.online ? STEAM_CDN + g.steamAppId + '/library_hero.jpg' : null;
+  }
+
+  function updateHeroBg(key) {
+    clearTimeout(heroBg.timer);
+    heroBg.timer = setTimeout(function () { showHeroBg(heroArtFor(key)); }, 140);
+  }
+
+  function showHeroBg(src) {
+    var imgs = $$('.hero-bg .hb');
+    if (imgs.length < 2 || src === heroBg.src) { return; }
+    heroBg.src = src;
+    if (!src) { imgs.forEach(function (i) { i.classList.remove('show'); }); return; }
+    var pic = new Image();
+    pic.onload = function () {
+      if (heroBg.src !== src) { return; }
+      var next = imgs[heroBg.index ^ 1];
+      var cur = imgs[heroBg.index];
+      next.src = src;
+      next.classList.remove('show');
+      void next.offsetWidth;
+      next.classList.add('show');
+      cur.classList.remove('show');
+      heroBg.index ^= 1;
+    };
+    pic.onerror = function () {
+      if (heroBg.src === src) { imgs.forEach(function (i) { i.classList.remove('show'); }); }
+    };
+    pic.src = src;
   }
 
   /* ---------- Lookups ---------- */
@@ -140,10 +301,12 @@
   }
 
   function gameTile(g, extra) {
-    return '<button type="button" class="tile f has-dot' + (demoArt[g.id] ? ' has-image' : '') + '" ' + extra +
+    var src = demoArt[g.id] || g.img || '';
+    return '<button type="button" class="tile f has-dot' + (src ? ' has-image' : '') + '" ' + extra +
       ' data-action="launch:' + g.id + '" aria-label="' + esc(g.name) + '">' +
       '<span class="tile-face" style="background:' + g.bg + '">' + g.art +
-      '<span class="tile-label">' + g.short + '</span>' + imgTag(g.id) + '</span>' +
+      '<span class="tile-label">' + g.short + '</span>' +
+      (src ? '<img class="tile-img" alt="" decoding="async" src="' + esc(src) + '">' : '') + '</span>' +
       (g.soon ? '<span class="soon-badge">Yakında</span>' : '') + '</button>';
   }
 
@@ -174,6 +337,8 @@
 
   function renderHero(index) {
     var key = D.home[index];
+    state.heroKey = key;
+    updateHeroBg(key);
     var hero = $('#hero');
     var side = $('#sideCards');
     var html = '';
@@ -198,11 +363,13 @@
     } else {
       var g = game(key);
       html = '<div class="hero-kicker">' + (index === 0 ? 'SON OYNANAN' : 'OYUN') + '</div><h1 class="hero-title' + (g.name.length > 15 ? ' long' : '') + '">' + esc(g.name) + '</h1>' +
-        '<div class="hero-meta"><span>' + esc(g.played) + '</span><span class="sep">/</span><span>' + esc(g.save) + '</span><span class="sep">/</span><span>' + esc(g.progress) + '</span></div>' +
+        '<div class="hero-meta">' + [g.played, g.save, g.progress].filter(Boolean).map(function (t, i) {
+          return (i ? '<span class="sep">/</span>' : '') + '<span>' + esc(t) + '</span>';
+        }).join('') + '</div>' +
         '<div class="hero-actions">' +
         '<button type="button" class="btn primary f" ' + heroBtn + ' data-action="launch:' + g.id + '"><span class="dot"></span>Oyna</button>' +
-        '<button type="button" class="btn f" ' + heroBtn + ' data-action="demo:Oyun sayfası 2. aşamada gelecek.">Oyun Sayfası</button>' +
-        '<button type="button" class="btn round f" ' + heroBtn + ' data-action="demo:Diğer seçenekler 2. aşamada gelecek." aria-label="Diğer seçenekler">' + ICON.more + '</button>' +
+        '<button type="button" class="btn f" ' + heroBtn + ' data-action="demo:Oyun sayfası bir sonraki adımda gelecek.">Oyun Sayfası</button>' +
+        '<button type="button" class="btn round f" ' + heroBtn + ' data-action="demo:Diğer seçenekler bir sonraki adımda gelecek." aria-label="Diğer seçenekler">' + ICON.more + '</button>' +
         '</div>';
       var pct = g.achievement ? Math.round(g.achievement.done / g.achievement.total * 100) : 0;
       sideHtml = !g.achievement ? '' : '<div class="card" style="display:flex;flex-direction:column;gap:14px">' +
@@ -364,6 +531,7 @@
             'aria-checked="' + (t.hex.toUpperCase() === prefs.accent.toUpperCase()) + '" style="background:' + t.hex + '"></button>';
         }).join('') + '</div></div>' +
         switchRow('motion', 'Hareketli arka plan', 'Kapatırsan arka plan durur, renkler kalır') +
+        switchRow('gameArt', 'Oyun görselleri', 'Seçili oyunun resmi ana ekranın arka planında görünür') +
         switchRow('autoBest', 'En iyi görüntüyü otomatik seç', 'Ekranının desteklediği en yüksek çözünürlüğü ve hızı kullanır') +
         switchRow('hdr', 'HDR', 'Destekleyen oyun ve videolarda daha parlak, canlı renkler') +
         '<div class="panel row"><div class="row-text"><b>Yazı boyutu</b><span>Uzaktan daha kolay okumak için büyüt</span></div><div class="seg" role="group" aria-label="Yazı boyutu">' +
@@ -611,6 +779,7 @@
     saved.set(key, prefs[key]);
     el.setAttribute('aria-checked', prefs[key] ? 'true' : 'false');
     if (key === 'motion') { applyMotion(); }
+    if (key === 'gameArt') { updateHeroBg(state.heroKey); }
     if (key === 'music' && window.KOSAudio) { KOSAudio.setMusic(prefs.music); }
     if (key === 'uiSounds' && window.KOSAudio) { KOSAudio.setUi(prefs.uiSounds); }
     if (key === 'hdr' && prefs.hdr) { toast('HDR açıldı. Gerçek ekran ayarı 4. aşamada bağlanacak.'); }
@@ -636,19 +805,44 @@
     if (g.soon) { toast(g.name + ' henüz PC\'de yok. Çıkınca haber vereceğiz (demo).'); return; }
     if (window.KOSAudio) { KOSAudio.duck(true); }
     openOverlay('launch');
+    state.leftForGame = false;
     $('#launchTitle').textContent = g.name;
     $('#launchText').textContent = 'Başlatılıyor...';
-    setTimeout(function () {
+    if (!g.live) {
+      setTimeout(function () {
+        if (state.overlay === 'launch') {
+          $('#launchText').textContent = 'Bu bir örnek oyun. Gerçek oyunların için K.OS Home yardımcısıyla açın. Geri dönmek için B tuşuna basın.';
+        }
+      }, 2200);
+      return;
+    }
+    api('/api/launch/' + g.steamAppId, { method: 'POST' }).then(function (r) {
+      if (!r.ok) { throw new Error(r.error || 'launch'); }
+      setTimeout(function () {
+        if (state.overlay === 'launch' && !state.leftForGame) {
+          $('#launchText').textContent = 'Oyun açılıyor. Steam ilk açılışta biraz zaman alabilir. Geri dönmek için B tuşuna basın.';
+        }
+      }, 4000);
+    }).catch(function () {
       if (state.overlay === 'launch') {
-        $('#launchText').textContent = 'Bu bir demo. Gerçek oyunlar 2. aşamada buradan başlayacak. Geri dönmek için B tuşuna basın.';
+        $('#launchText').textContent = 'Oyun başlatılamadı. Steam\'in yüklü olduğundan emin olun. Geri dönmek için B tuşuna basın.';
       }
-    }, 2200);
+    });
   }
 
   function openApp(a) {
     if (!a) { return; }
-    if (a.id === 'windows') { powerAction('windows'); return; }
-    if (!state.online) { toast('İnternet bağlantısı yok. ' + a.name + ' için internete bağlanın.'); return; }
+    var viaHelper = live.platform === 'linux';
+    if (a.id === 'windows' && !viaHelper) { powerAction('windows'); return; }
+    if (a.net && !state.online) { toast('İnternet bağlantısı yok. ' + a.name + ' için internete bağlanın.'); return; }
+    if (viaHelper) {
+      api('/api/open/' + a.id, { method: 'POST' }).then(function (r) {
+        if (r.ok) { toast(a.id === 'windows' ? 'Windows\'a geçiş soruluyor...' : a.name + ' açılıyor...'); }
+        else if (r.error === 'missing') { toast(a.name + ' bu bilgisayarda bulunamadı.'); }
+        else { toast(a.name + ' açılamadı.'); }
+      }).catch(function () { toast(a.name + ' açılamadı. K.OS Home yardımcısı çalışmıyor.'); });
+      return;
+    }
     var win = window.open(a.url, '_blank');
     if (win) {
       try { win.opener = null; } catch (e) { /* not needed */ }
@@ -659,6 +853,7 @@
   }
 
   function powerAction(kind) {
+    if (kind === 'windows' && live.platform === 'linux') { openApp(app('windows')); return; }
     var msg = {
       sleep: 'Demo: K.OS\'ta bu düğme konsolu uyku moduna alır.',
       restart: 'Demo: K.OS\'ta bu düğme konsolu yeniden başlatır.',
@@ -933,8 +1128,16 @@
     if (!window.KOSAudio) { return; }
     KOSAudio.duck(document.hidden || !document.hasFocus() || state.overlay === 'launch');
   }
-  window.addEventListener('blur', syncDuck);
-  window.addEventListener('focus', syncDuck);
+  window.addEventListener('blur', function () {
+    if (state.overlay === 'launch') { state.leftForGame = true; }
+    syncDuck();
+  });
+  window.addEventListener('focus', function () {
+    if (state.overlay === 'launch' && state.leftForGame) { closeOverlay(); }
+    state.leftForGame = false;
+    syncDuck();
+    refreshLibrary();
+  });
   document.addEventListener('visibilitychange', syncDuck);
 
   if (window.KOSAudio) {
@@ -946,11 +1149,13 @@
   updatePad(false);
   requestAnimationFrame(poll);
 
-  loadDemoArt(function () {
-    renderHome();
-    renderGames();
-    renderApps();
-    showScreen('home');
-    setFocus($('#homeRow .tile'));
+  loadLibrary(function () {
+    loadDemoArt(function () {
+      renderHome();
+      renderGames();
+      renderApps();
+      showScreen('home');
+      setFocus($('#homeRow .tile'));
+    });
   });
 })();

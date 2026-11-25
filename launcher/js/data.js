@@ -1,7 +1,8 @@
 /*
-  K.OS launcher sample data (phase 1).
+  K.OS launcher sample data.
   Games here are made-up examples so the screens have something to show.
-  In phase 2 this list is replaced by the real game library on the console.
+  When the launcher runs through the K.OS Home helper, the real installed
+  Steam games replace them (see js/app.js, "Real game library").
 */
 window.KOS_DATA = {
   themes: [
@@ -119,7 +120,7 @@ window.KOS_DATA = {
     }
   ],
 
-  gamesNote: 'Örnek kütüphane. Gerçek oyunların 2. aşamada burada.',
+  gamesNote: 'Örnek kütüphane. Gerçek oyunların için K.OS Home\'u yardımcı programla aç.',
 
   home: ['kuzey-isigi', 'demir-hat', 'gece-surusu', 'app:netflix', 'app:hbomax', 'app:xcloud', 'library'],
 

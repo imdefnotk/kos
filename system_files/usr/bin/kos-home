@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# K.OS Home: the K.OS console home screen (phase 2 test version).
+# 1. Starts the K.OS Home helper (reads your Steam games, starts them, opens K.OS apps)
+# 2. Opens K.OS Home full screen in Google Chrome
+# Close it with Alt+F4. Later (phase 3) K.OS will boot straight into it.
+#
+# Check what the helper sees without opening anything:   kos-home --list
+set -uo pipefail
+
+HOME_DIR=/usr/share/kos/home
+HELPER="${HOME_DIR}/kos-home-helper.py"
+PORT=47800
+URL="http://127.0.0.1:${PORT}/"
+BROWSER_ID="com.google.Chrome"
+LOG="${XDG_RUNTIME_DIR:-/tmp}/kos-home-helper.log"
+
+if [ "${1:-}" = "--list" ]; then
+    exec python3 "${HELPER}" --list
+fi
+
+ping_helper() {
+    curl -fs -m 1 "${URL}api/ping" 2>/dev/null | grep -q '"kos-home"'
+}
+
+case "${LANG:-}" in
+    en*)
+        T_NOBROWSER="The K.OS browser is still being downloaded in the background. Please make sure you are online and try again in a few minutes."
+        T_NOHELPER="K.OS Home could not start. Details: ${LOG}"
+        ;;
+    *)
+        T_NOBROWSER="K.OS tarayıcısı arka planda hâlâ indiriliyor. Lütfen internete bağlı olduğunuzdan emin olun ve birkaç dakika sonra tekrar deneyin."
+        T_NOHELPER="K.OS Home başlatılamadı. Ayrıntılar: ${LOG}"
+        ;;
+esac
+
+show_error() {
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "K.OS" --sorry "$1"
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --warning --title="K.OS" --text="$1"
+    fi
+    echo "$1" >&2
+}
+
+if ! ping_helper; then
+    nohup python3 "${HELPER}" --port "${PORT}" --root "${HOME_DIR}" >"${LOG}" 2>&1 &
+    for _ in $(seq 1 40); do
+        ping_helper && break
+        sleep 0.25
+    done
+fi
+if ! ping_helper; then
+    show_error "${T_NOHELPER}"
+    exit 1
+fi
+
+if ! flatpak info "${BROWSER_ID}" >/dev/null 2>&1; then
+    show_error "${T_NOBROWSER}"
+    exit 1
+fi
+
+PROFILE_DIR="${HOME}/.var/app/${BROWSER_ID}/kos-profiles/kos-home"
+mkdir -p "${PROFILE_DIR}"
+
+exec flatpak run "${BROWSER_ID}" \
+    "--user-data-dir=${PROFILE_DIR}" \
+    --no-first-run \
+    --no-default-browser-check \
+    --password-store=basic \
+    --autoplay-policy=no-user-gesture-required \
+    --start-fullscreen \
+    "--app=${URL}"

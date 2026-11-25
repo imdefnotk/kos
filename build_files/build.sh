@@ -38,7 +38,15 @@ sed -i 's/^NAME=.*/NAME="K.OS"/' /usr/lib/os-release
 systemctl enable kos-system-setup.service
 systemctl enable kos-flatpak-setup.service
 
-# 7. Flavor specific startup
+# 7. K.OS Home launcher files: readable by everyone, no Windows-only or private demo files
+rm -rf /usr/share/kos/home/demo-art "/usr/share/kos/home/K.OS Launcher.cmd"
+find /usr/share/kos/home -type d -exec chmod 0755 {} +
+find /usr/share/kos/home -type f -exec chmod 0644 {} +
+chmod 0755 /usr/share/kos/home/kos-home-helper.py
+python3 -m py_compile /usr/share/kos/home/kos-home-helper.py
+rm -rf /usr/share/kos/home/__pycache__
+
+# 8. Flavor specific startup
 if [ "${KOS_SESSION_MODE}" = "nvidia-desktop" ]; then
     # NVIDIA: KDE starts, then kos-session opens Steam Big Picture
     test -f /etc/xdg/autostart/kos-session.desktop
