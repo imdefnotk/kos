@@ -3,8 +3,11 @@
 # The console itself is the K.OS session (kos-start-session, kos-shell): it has
 # no desktop at all. This script only runs when Plasma starts, and only
 # refreshes the K.OS launchers and settings so they are also there on the desktop.
-# To go back to the console: open "K.OS Home" from the app menu.
+# To go back to the console: open "K.OS Home" from the app menu, log out,
+# or restart. Desktop mode lasts for one login only.
 set -uo pipefail
 
+# Both monitors back (the K.OS session uses only the main one)
+/usr/libexec/kos-single-display --restore || true
 /usr/libexec/kos-firstboot-setup || true
 exit 0

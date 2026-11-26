@@ -778,7 +778,10 @@ class Keys:
 
 def is_real_controller(dev):
     try:
-        caps = dev.capabilities()
+        # absinfo=False: plain axis numbers. With the default (absinfo=True) the
+        # axes come as (number, details) pairs, ABS_X is never "in" them and every
+        # controller was skipped ("Bağlı kumanda yok").
+        caps = dev.capabilities(absinfo=False)
     except OSError:
         return False
     keys = set(caps.get(e.EV_KEY, []))
@@ -797,6 +800,7 @@ def is_real_controller(dev):
     except OSError:
         return False
     if "/devices/virtual/input/" in sys_path + "/" and "/uhid/" not in sys_path:
+        log.debug("skipping %s (%s): made by a program, not a real controller", dev.path, dev.name)
         return False
     return True
 
@@ -832,6 +836,12 @@ class Layer:
     def scan(self):
         if not self.enabled:
             return
+        # Device numbers are reused when devices come and go: look at skipped
+        # ones again now and then, so a new controller is never missed
+        self.scans = getattr(self, "scans", 0) + 1
+        if self.scans % 15 == 0:
+            self.ignored.clear()
+            self.broken.clear()
         for path in evdev.list_devices():
             if path in self.pads or path in self.ignored or path in self.broken:
                 continue

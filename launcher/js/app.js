@@ -1572,3 +1572,29 @@
     });
   });
 })();
+
+/* Mouse pointer: hidden while the controller (or keyboard) is used, back as
+   soon as the mouse really moves. Like a console, no arrow floating on screen. */
+(function () {
+  var hidden = false;
+  function setHidden(on) {
+    if (on === hidden) { return; }
+    hidden = on;
+    document.documentElement.classList.toggle('kos-nocursor', on);
+  }
+  document.addEventListener('keydown', function () { setHidden(true); }, true);
+  document.addEventListener('mousemove', function (e) {
+    if (Math.abs(e.movementX || 0) + Math.abs(e.movementY || 0) > 2) { setHidden(false); }
+  }, true);
+  setInterval(function () {
+    var list;
+    try { list = navigator.getGamepads ? navigator.getGamepads() : []; } catch (err) { return; }
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (!p || !p.connected) { continue; }
+      for (var b = 0; b < p.buttons.length; b++) { if (p.buttons[b] && p.buttons[b].pressed) { setHidden(true); return; } }
+      for (var a = 0; a < Math.min(p.axes.length, 4); a++) { if (Math.abs(p.axes[a]) > 0.5) { setHidden(true); return; } }
+    }
+  }, 100);
+  setHidden(true);
+})();

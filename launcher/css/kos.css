@@ -534,3 +534,6 @@ main { position: absolute; inset: 0; }
 .avatar-gear svg { width: 16px; height: 16px; }
 .avatar.focused { outline: none; box-shadow: 0 0 0 4px rgba(244,244,245,0.85); }
 .avatar.active { border-color: var(--accent); }
+
+/* Pointer hidden while the controller is used (see the end of js/app.js) */
+html.kos-nocursor, html.kos-nocursor * { cursor: none !important; }

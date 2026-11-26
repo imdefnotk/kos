@@ -22,6 +22,11 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
         XDG_SESSION_DESKTOP KDE_SESSION_VERSION KOS_SESSION LANG LANGUAGE >/dev/null 2>&1 || true
 fi
 
+# For the log: which program owns the shortcut service (must be this KWin,
+# otherwise Alt+Tab and the K.OS window actions do nothing)
+owner_pid="$(busctl --user status org.kde.kglobalaccel 2>/dev/null | sed -n 's/^PID=//p')"
+step "shortcut service owner: ${owner_pid:-none} $(cat "/proc/${owner_pid:-0}/comm" 2>/dev/null)"
+
 step "setup"
 timeout 60 /usr/libexec/kos-firstboot-setup >> "${LOG}" 2>&1 || step "setup did not finish"
 timeout 20 /usr/libexec/kos-single-display >/dev/null 2>&1 || true

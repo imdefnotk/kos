@@ -47,6 +47,30 @@ clean_env
 
 PLASMA_STARTS="${STATE_DIR}/plasma-starts"
 
+# A desktop (KWin, Plasma) left over from the previous login must be gone
+# before a new one starts. Two at once fight over the screen and keyboard:
+# black monitor, Alt+Tab dead (the old one keeps the shortcut service
+# org.kde.kglobalaccel), slow games. Nothing of this login is running yet,
+# so everything found here is left over.
+stop_leftovers() {
+    local uid n
+    uid="$(id -u)"
+    systemctl --user stop plasma-workspace.target plasma-core.target >/dev/null 2>&1 || true
+    systemctl --user stop plasma-kwin_wayland.service plasma-plasmashell.service \
+        plasma-ksmserver.service plasma-kglobalaccel.service >/dev/null 2>&1 || true
+    for n in $(seq 1 20); do
+        pgrep -u "${uid}" -x 'kwin_wayland|plasmashell|ksmserver|kglobalacceld' >/dev/null 2>&1 || break
+        [ "${n}" -eq 10 ] && pkill -TERM -u "${uid}" -x 'kwin_wayland|kwin_wayland_wr|plasmashell|ksmserver|kglobalacceld' >/dev/null 2>&1
+        sleep 0.5
+    done
+    if pgrep -u "${uid}" -x 'kwin_wayland|plasmashell|ksmserver|kglobalacceld' >/dev/null 2>&1; then
+        log "leftover desktop still running, forcing it to close"
+        pkill -KILL -u "${uid}" -x 'kwin_wayland|kwin_wayland_wr|plasmashell|ksmserver|kglobalacceld' >/dev/null 2>&1 || true
+        sleep 1
+    fi
+    pkill -u "${uid}" -x Xwayland >/dev/null 2>&1 || true
+}
+
 start_plasma() {
     # Start the normal Plasma session exactly the way the login screen would
     local line=""
@@ -56,6 +80,9 @@ start_plasma() {
     [ -n "${line}" ] || line="/usr/bin/startplasma-wayland"
     # Plasma's own keyboard shortcuts and hot corners back (see kos-shortcuts)
     /usr/libexec/kos-shortcuts restore >> "${LOG}" 2>&1 || true
+    # Desktop mode is for this login only: next login or restart is K.OS again
+    rm -f "${MARK}"
+    stop_leftovers
     clean_env
     # Remember when Plasma was started (restart-loop guard below)
     echo "$(date +%s) $(head -n 2 "${PLASMA_STARTS}" 2>/dev/null | tr '\n' ' ')" | tr ' ' '\n' | grep -v '^$' | head -n 3 > "${PLASMA_STARTS}.tmp" && mv -f "${PLASMA_STARTS}.tmp" "${PLASMA_STARTS}"
@@ -117,6 +144,8 @@ export XDG_SESSION_DESKTOP=KDE
 export KDE_SESSION_VERSION=6
 export KOS_SESSION=1
 
+stop_leftovers
+
 KWIN="kwin_wayland_wrapper"
 command -v "${KWIN}" >/dev/null 2>&1 || KWIN="kwin_wayland"
 
@@ -141,9 +170,12 @@ else
     echo 0 > "${FAILS_FILE}"
 fi
 
-# Desktop mode was chosen inside K.OS Home: switch to Plasma right away
+# Desktop mode was chosen inside K.OS Home: end this login. The login
+# screen logs in again by itself (Relogin=true) and this script then starts
+# Plasma in a fresh, clean login (starting it here, in the same login right
+# after KWin, left a half-dead screen behind: black monitor).
 if [ -f "${MARK}" ]; then
-    start_plasma
+    log "desktop mode chosen: ending this login, the next one opens Plasma"
 fi
 
 exit "${code}"

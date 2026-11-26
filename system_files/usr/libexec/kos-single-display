@@ -7,7 +7,9 @@ Keeps the main display on (the one KDE marks as primary, priority 1) and
 turns every other connected display off. Runs at login and when K.OS Home opens.
 Safe to run again and again: if only one display is on, it does nothing.
 
-Owner escape hatch: create ~/.config/kos-desktop-mode to keep all displays.
+Only acts inside the K.OS session (KOS_SESSION=1). The displays it turns off
+are written down, and the developer Plasma desktop turns them back on at login:
+  kos-single-display --restore
 Check what it would do without changing anything:  kos-single-display --dry-run
 """
 
@@ -32,9 +34,32 @@ def area(o):
     return 0
 
 
+OFF_LIST = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
+                        "kos", "displays-off")
+
+
+def restore():
+    """Plasma desktop: turn back on the displays the K.OS session turned off."""
+    try:
+        with open(OFF_LIST, "r", encoding="utf-8") as f:
+            names = [n.strip() for n in f if n.strip()]
+    except OSError:
+        return 0
+    if names and shutil.which("kscreen-doctor"):
+        print("turning back on: %s" % ", ".join(names))
+        subprocess.run(["kscreen-doctor"] + ["output.%s.enable" % n for n in names], timeout=20)
+    try:
+        os.remove(OFF_LIST)
+    except OSError:
+        pass
+    return 0
+
+
 def main():
     dry = "--dry-run" in sys.argv
-    if os.path.exists(os.path.expanduser("~/.config/kos-desktop-mode")) and not dry:
+    if "--restore" in sys.argv:
+        return restore()
+    if os.environ.get("KOS_SESSION") != "1" and not dry:
         return 0
     if not shutil.which("kscreen-doctor"):
         print("kscreen-doctor not found", file=sys.stderr)
@@ -59,6 +84,16 @@ def main():
     args = ["kscreen-doctor"] + ["output.%s.disable" % o.get("name") for o in others]
     print("turning off: %s" % ", ".join(o.get("name", "?") for o in others))
     if not dry:
+        try:
+            os.makedirs(os.path.dirname(OFF_LIST), exist_ok=True)
+            old = set()
+            if os.path.exists(OFF_LIST):
+                with open(OFF_LIST, "r", encoding="utf-8") as f:
+                    old = {n.strip() for n in f if n.strip()}
+            with open(OFF_LIST, "w", encoding="utf-8") as f:
+                f.write("\n".join(sorted(old | {o.get("name") for o in others if o.get("name")})) + "\n")
+        except OSError:
+            pass
         subprocess.run(args, timeout=20)
     return 0
 

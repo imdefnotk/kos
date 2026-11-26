@@ -6,9 +6,9 @@ K.OS keyboard shortcuts for the K.OS session.
 The K.OS session keeps only a few window shortcuts, like a console:
   Alt+Tab / Alt+Shift+Tab   switch between K.OS Home, games and apps
   Alt+F4                    close a game or app (K.OS Home itself refuses to close)
-Everything else is off: no Meta key menu, no overview, no shortcuts that open
-programs (Konsole, file manager), no hot corners. The VT switch Ctrl+Alt+F3
-(text console, the owner's recovery path) is not a KDE shortcut and still works.
+  Ctrl+Alt+T                a terminal (Konsole): the owner's recovery path
+Everything else is off: no Meta key menu, no overview, no other shortcuts that
+open programs (file manager), no hot corners.
 
 KDE keeps all shortcuts in one file (~/.config/kglobalshortcutsrc), shared with
 the developer Plasma desktop. So:
@@ -41,6 +41,8 @@ KEEP = {
     "Walk Through Windows (Reverse)": "Alt+Shift+Tab",
     "Window Close": "Alt+F4",
 }
+# Program shortcuts the K.OS session keeps (desktop file: keys)
+KEEP_LAUNCH = {"org.kde.konsole.desktop": "Ctrl+Alt+T"}
 # K.OS window actions from the K.OS Console KWin script: no keys, run through D-Bus
 KOS_ACTIONS = ("KOS Show Home", "KOS Resume Game", "KOS Toggle Home")
 
@@ -145,6 +147,8 @@ def kos_version(source):
                 put(group, key, "%s,%s,%s" % (KEEP[key], KEEP[key], parts[-1] if len(parts) > 2 else key))
             elif group == "kwin" and key in KOS_ACTIONS:
                 put(group, key, value)
+            elif group.startswith("services][") and group[len("services]["):] in KEEP_LAUNCH and key == "_launch":
+                put(group, key, KEEP_LAUNCH[group[len("services]["):]])
             elif len(parts) >= 3:
                 put(group, key, "none," + ",".join(parts[1:]))
             else:
@@ -158,7 +162,7 @@ def kos_version(source):
     for f in launcher_desktop_files():
         g = "services][" + f
         if "_launch" not in groups.get(g, {}):
-            put(g, "_launch", "none")
+            put(g, "_launch", KEEP_LAUNCH.get(f, "none"))
     lines = []
     for g in order:
         lines.append("[%s]" % g)
