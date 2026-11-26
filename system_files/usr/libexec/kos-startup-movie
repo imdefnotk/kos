@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# K.OS startup video for Steam, installed for the current user.
+# Runs before login (from kos-system-setup, for every user) and again at login
+# (from kos-firstboot-setup). Safe to run any number of times.
+set -uo pipefail
+
+# K.OS startup video: plays when Steam opens (Big Picture and Gaming Mode).
+# Steam looks for its startup movie override in config/uioverrides/movies.
+# The file is named like Steam's own startup movie so it replaces it with no
+# setting to change. A movie the user put there themselves is never replaced:
+# K.OS only writes the file when it is missing or is a copy K.OS installed earlier.
+KOS_MOVIE=/usr/share/kos/boot/kos-startup.webm
+KOS_MOVIE_MARK="${HOME}/.config/kos/startup-movie.sha256"
+if [ -f "${KOS_MOVIE}" ]; then
+    if [ -d "${HOME}/.steam/root" ]; then
+        STEAM_DIR="${HOME}/.steam/root"
+    else
+        STEAM_DIR="${HOME}/.local/share/Steam"
+    fi
+    # Only once Steam has set itself up for this user (it creates its config
+    # folder on first run). Creating Steam folders earlier could confuse
+    # Steam's first-time install.
+    if [ ! -d "${STEAM_DIR}/config" ]; then
+        exit 0
+    fi
+    MOVIE_DIR="${STEAM_DIR}/config/uioverrides/movies"
+    TARGET="${MOVIE_DIR}/deck_startup.webm"
+    NEW_SUM="$(sha256sum "${KOS_MOVIE}" | cut -d' ' -f1)"
+    OLD_SUM="$(cat "${KOS_MOVIE_MARK}" 2>/dev/null || true)"
+    CUR_SUM=""
+    [ -f "${TARGET}" ] && CUR_SUM="$(sha256sum "${TARGET}" | cut -d' ' -f1)"
+    if [ ! -f "${TARGET}" ] || { [ -n "${OLD_SUM}" ] && [ "${CUR_SUM}" = "${OLD_SUM}" ] && [ "${CUR_SUM}" != "${NEW_SUM}" ]; }; then
+        mkdir -p "${MOVIE_DIR}" "$(dirname "${KOS_MOVIE_MARK}")"
+        cp -f "${KOS_MOVIE}" "${TARGET}.kos-tmp" && mv -f "${TARGET}.kos-tmp" "${TARGET}"
+        printf '%s\n' "${NEW_SUM}" > "${KOS_MOVIE_MARK}"
+    elif [ "${CUR_SUM}" = "${NEW_SUM}" ] && [ "${OLD_SUM}" != "${NEW_SUM}" ]; then
+        mkdir -p "$(dirname "${KOS_MOVIE_MARK}")"
+        printf '%s\n' "${NEW_SUM}" > "${KOS_MOVIE_MARK}"
+    fi
+fi
+
+exit 0

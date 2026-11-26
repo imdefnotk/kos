@@ -9,3 +9,7 @@ windows/*log*.txt
 # Private demo logos for investor demos. Never commit them (see launcher/demo-art/README.txt)
 launcher/demo-art/*
 !launcher/demo-art/README.txt
+
+# Startup video build scratch (rebuild.sh, frame checks) and upscaler weights
+art/boot/out/
+*.pth

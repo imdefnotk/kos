@@ -76,4 +76,7 @@ EOF
     fi
 fi
 
+# K.OS startup video for Steam (see /usr/libexec/kos-startup-movie)
+/usr/libexec/kos-startup-movie || true
+
 exit 0

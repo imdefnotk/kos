@@ -2,8 +2,8 @@
 # K.OS system setup. Runs as the system on every boot, before the login screen.
 # 1. Clock: store hardware time as local time, the way Windows does, so neither
 #    OS shows the wrong time after switching.
-# 2. Steam tiles: add the K.OS tiles and artwork to each user's Steam, while
-#    Steam is still closed.
+# 2. Steam tiles and startup video: add the K.OS tiles, artwork and startup
+#    video to each user's Steam, while Steam is still closed.
 # 3. Automatic login (NVIDIA desktop flavor): log the first user straight into
 #    KDE so Steam Big Picture opens without a password screen. (Gaming Mode
 #    images log in automatically on their own.)
@@ -29,6 +29,8 @@ while IFS=: read -r name _ uid _ _ home shell; do
         case "${shell}" in *nologin|*false) continue ;; esac
         runuser -u "${name}" -- env HOME="${home}" /usr/libexec/kos-steam-shortcuts \
             || echo "K.OS: could not update Steam tiles for ${name}" >&2
+        runuser -u "${name}" -- env HOME="${home}" /usr/libexec/kos-startup-movie \
+            || echo "K.OS: could not install the startup video for ${name}" >&2
     fi
 done < /etc/passwd
 

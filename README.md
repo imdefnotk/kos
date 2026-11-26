@@ -31,6 +31,10 @@ systemctl reboot
 | `system_files/usr/libexec/kos-flatpak-setup` | Installs Google Chrome, retries until online |
 | `system_files/usr/share/kos/artwork/` | K.OS tile pictures (made by `art/make_tile_art.py`) |
 | `launcher/` | The K.OS home screen app (phase 1 prototype). See `launcher/README.md` |
+| `system_files/usr/share/kos/boot/kos-startup.webm` | The K.OS startup video (10 s, 4K). Steam plays it when it opens |
+| `system_files/usr/libexec/kos-startup-movie` | Installs the startup video into each user's Steam (never replaces a user's own) |
+| `art/boot/` | Source for the startup video: picture and sound scripts, fonts, sound master. See `art/boot/README.md` |
+| `art/operator/` | The Operator mascot artwork at every step (original, expanded, cut out, 4K). See `art/operator/README.md` |
 | `windows/kos-windows-setup.ps1` | Windows side: "Return to K.OS" shortcut, Fast Startup off |
 
 Based on the [Universal Blue image template](https://github.com/ublue-os/image-template).
