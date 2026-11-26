@@ -1358,6 +1358,10 @@
     var b = map[e.code];
     if (!b) { return; }
     e.preventDefault();
+    // Steam turns controller presses into keys too (arrows, Enter, Escape).
+    // While the controller is in use, those copies are ignored, otherwise
+    // one press moves two steps.
+    if (padBusy()) { return; }
     press(b);
   });
 
@@ -1382,6 +1386,18 @@
   var prev = {};
   var hold = { dir: null, next: 0 };
   var diag = { on: false, el: null, lastEvent: 'yok', error: '' };
+
+  var lastPadUse = -1e9;
+  function padBusy() {
+    if (performance.now() - lastPadUse < 400) { return true; }
+    var pads = readPads();
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      for (var b = 0; b < p.buttons.length; b++) { if (p.buttons[b] && p.buttons[b].pressed) { return true; } }
+      for (var a = 0; a < Math.min(p.axes.length, 2); a++) { if (Math.abs(p.axes[a]) > 0.5) { return true; } }
+    }
+    return false;
+  }
 
   function readPads() {
     try {
@@ -1443,6 +1459,7 @@
         var s = padState(p);
         KEYS.forEach(function (k) { now[k] = now[k] || s[k]; });
       });
+      if (KEYS.some(function (k) { return now[k]; })) { lastPadUse = performance.now(); }
       // Another window (a game, Netflix) is in front: ignore the controller here,
       // otherwise K.OS Home would move behind it.
       if (!document.hasFocus()) {

@@ -4,6 +4,7 @@
 #    OS shows the wrong time after switching.
 # 2. Steam tiles and startup video: add the K.OS tiles, artwork and startup
 #    video to each user's Steam, while Steam is still closed.
+# 2b. Boot menu: hidden, no boot text (see below)
 # 3. Automatic login: log the first user straight into the K.OS session
 #    (K.OS Home, no desktop) without a password screen. (The old Gaming Mode
 #    test images log in automatically on their own.)
@@ -35,6 +36,49 @@ while IFS=: read -r name _ uid _ _ home shell; do
             || echo "K.OS: could not install the startup video for ${name}" >&2
     fi
 done < /etc/passwd
+
+# 2b. Boot menu: no GRUB menu and no "Booting `K.OS (Konsol OS)'" text at
+#     power on. GRUB's own file (/boot/grub2/grub.cfg, written by bootupd) always
+#     shows the menu for 1 second; at its very end it reads custom.cfg, so the
+#     K.OS settings go there. The menu stays reachable for the owner: hold Esc
+#     while the motherboard logo goes away. A menu someone asked for once
+#     (menu_show_once_timeout) is left alone.
+#     To turn this off: create the empty file /etc/kos/show-boot-menu
+GRUB_CUSTOM=/boot/grub2/custom.cfg
+GRUB_TEXT='# K.OS boot screen (written by kos-system-setup, changes are overwritten)
+if [ "${timeout_style}" = "menu" -a "${timeout}" = "1" ]; then
+  set timeout_style=hidden
+  set timeout=1
+fi
+set menu_color_normal=light-gray/black
+set menu_color_highlight=black/light-gray
+set color_normal=black/black'
+if [ -f /etc/kos/show-boot-menu ]; then
+    GRUB_TEXT=""
+fi
+if [ -d /boot/grub2 ]; then
+    current="$(cat "${GRUB_CUSTOM}" 2>/dev/null || true)"
+    if [ "${current}" != "${GRUB_TEXT}" ]; then
+        remounted=""
+        if [ ! -w /boot/grub2 ] || ! touch /boot/grub2/.kos-test 2>/dev/null; then
+            mount -o remount,rw /boot 2>/dev/null && remounted=1
+        fi
+        rm -f /boot/grub2/.kos-test
+        if [ -z "${GRUB_TEXT}" ]; then
+            rm -f "${GRUB_CUSTOM}"
+        elif printf '%s\n' "${GRUB_TEXT}" > "${GRUB_CUSTOM}.kos-tmp" && sync; then
+            mv -f "${GRUB_CUSTOM}.kos-tmp" "${GRUB_CUSTOM}"
+            sync
+            echo "K.OS: boot menu hidden (${GRUB_CUSTOM})"
+        else
+            rm -f "${GRUB_CUSTOM}.kos-tmp"
+            echo "K.OS: could not write ${GRUB_CUSTOM}" >&2
+        fi
+        if [ -n "${remounted}" ]; then
+            mount -o remount,ro /boot 2>/dev/null || true
+        fi
+    fi
+fi
 
 # 3. Automatic login
 SDDM_FILE=/etc/sddm.conf.d/zz-kos-autologin.conf

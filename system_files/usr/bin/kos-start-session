@@ -8,7 +8,7 @@
 #   game (never K.OS Home). See /usr/libexec/kos-shortcuts. Under the hood it is
 #   KWin (the KDE window manager) running with nothing but K.OS Home.
 #
-# Developer desktop mode (normal KDE Plasma desktop, both monitors):
+# Developer desktop mode (normal KDE Plasma desktop, main monitor only):
 #   in K.OS Home choose Ayarlar > Sistem Bilgisi > Masaüstüne geç,
 #   or create the empty file ~/.config/kos-desktop-mode (for example from a
 #   text console: Ctrl+Alt+F3, log in, run: touch ~/.config/kos-desktop-mode

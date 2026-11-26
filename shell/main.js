@@ -25,7 +25,7 @@
 //                    example Shift+Tab for the Steam overlay)
 'use strict';
 
-const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, screen } = require('electron');
 const { execFile } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -283,16 +283,23 @@ function tellInput(line) {
 }
 
 function createMenuWindow() {
+  // Full screen over the game. It must be resizable: a fixed-size window is
+  // not made full screen on Wayland, and stayed a small box in the corner.
+  const area = screen.getPrimaryDisplay().bounds;
   menuWin = new BrowserWindow({
     title: MENU_TITLE,
     show: false,
+    x: area.x,
+    y: area.y,
+    width: area.width,
+    height: area.height,
     fullscreen: true,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
     skipTaskbar: true,
-    resizable: false,
+    resizable: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -343,6 +350,7 @@ function showMenu() {
   menuShownAt = Date.now();
   menuWin.webContents.send('kos-menu-show');
   menuWin.show();
+  if (!menuWin.isFullScreen()) { menuWin.setFullScreen(true); }
   menuWin.focus();
   tellInput('menu-open');
 }

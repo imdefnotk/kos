@@ -7,9 +7,9 @@ Keeps the main display on (the one KDE marks as primary, priority 1) and
 turns every other connected display off. Runs at login and when K.OS Home opens.
 Safe to run again and again: if only one display is on, it does nothing.
 
-Only acts inside the K.OS session (KOS_SESSION=1). The displays it turns off
-are written down, and the developer Plasma desktop turns them back on at login:
-  kos-single-display --restore
+Owner decision (2026-11-26): one display everywhere on K.OS, also on the
+developer Plasma desktop. The displays it turns off are written down, so they
+can be turned back on by hand:  kos-single-display --restore
 Check what it would do without changing anything:  kos-single-display --dry-run
 """
 
@@ -59,8 +59,6 @@ def main():
     dry = "--dry-run" in sys.argv
     if "--restore" in sys.argv:
         return restore()
-    if os.environ.get("KOS_SESSION") != "1" and not dry:
-        return 0
     if not shutil.which("kscreen-doctor"):
         print("kscreen-doctor not found", file=sys.stderr)
         return 0

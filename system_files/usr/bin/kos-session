@@ -7,7 +7,5 @@
 # or restart. Desktop mode lasts for one login only.
 set -uo pipefail
 
-# Both monitors back (the K.OS session uses only the main one)
-/usr/libexec/kos-single-display --restore || true
 /usr/libexec/kos-firstboot-setup || true
 exit 0
