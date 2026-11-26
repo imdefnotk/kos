@@ -107,3 +107,25 @@ else
     rm -f /etc/xdg/autostart/kos-session.desktop /usr/share/wayland-sessions/kos.desktop
     systemctl --global enable kos-firstboot.service
 fi
+
+# 9. K.OS boot screen (Plymouth theme "kos": the K. logo with a breathing red dot).
+#    The boot screen lives inside the early boot files (initramfs), so they are
+#    rebuilt here for the image's kernel. If that fails, the build keeps the
+#    original boot files (Bazzite's boot screen) instead of failing.
+chmod 0755 /usr/share/plymouth/themes/kos
+chmod 0644 /usr/share/plymouth/themes/kos/*
+if command -v plymouth-set-default-theme >/dev/null 2>&1 && command -v dracut >/dev/null 2>&1; then
+    plymouth-set-default-theme kos
+    KVER="$(ls /usr/lib/modules | sort -V | tail -n 1)"
+    if TMPDIR=/tmp dracut --no-hostonly --kver "${KVER}" --reproducible --add ostree \
+            -f "/tmp/initramfs-kos.img"; then
+        install -m 0600 /tmp/initramfs-kos.img "/usr/lib/modules/${KVER}/initramfs.img"
+        rm -f /tmp/initramfs-kos.img
+        echo "K.OS boot screen built into the boot files for ${KVER}"
+    else
+        echo "WARNING: could not rebuild the boot files, keeping the old boot screen" >&2
+    fi
+else
+    echo "WARNING: plymouth or dracut missing, keeping the old boot screen" >&2
+fi
+

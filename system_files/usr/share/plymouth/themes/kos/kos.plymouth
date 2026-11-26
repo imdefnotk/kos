@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=K.OS
+Description=K.OS boot screen: the K. logo with a slowly breathing red dot (Nefes)
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/kos
+ScriptFile=/usr/share/plymouth/themes/kos/kos.script

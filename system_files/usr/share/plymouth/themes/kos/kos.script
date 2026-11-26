@@ -1,0 +1,73 @@
+# K.OS boot screen (Plymouth). The K. logo on K.OS black, the red dot breathes
+# slowly, exactly like the first second of the K.OS startup video.
+# Images: k.png (the K) and dot.png (the red dot with its soft glow). Both are
+# the same size, so they line up when placed at the same spot.
+# The K is 560 pixels tall inside k.png; on screen it is 16 % of the height.
+
+Window.SetBackgroundTopColor(0.039, 0.039, 0.047);
+Window.SetBackgroundBottomColor(0.039, 0.039, 0.047);
+
+k_image = Image("k.png");
+dot_image = Image("dot.png");
+
+screen_w = Window.GetWidth();
+screen_h = Window.GetHeight();
+scale = (screen_h * 0.16) / 560;
+w = Math.Int(k_image.GetWidth() * scale);
+h = Math.Int(k_image.GetHeight() * scale);
+
+k_sprite = Sprite(k_image.Scale(w, h));
+dot_sprite = Sprite(dot_image.Scale(w, h));
+
+x = Window.GetX() + Math.Int((screen_w - w) / 2);
+y = Window.GetY() + Math.Int((screen_h - h) / 2);
+k_sprite.SetPosition(x, y, 1);
+dot_sprite.SetPosition(x, y, 2);
+
+# Breathing: one slow breath every 2.6 seconds (refresh runs 50 times a second)
+frame = 0;
+fun refresh_callback() {
+    frame = frame + 1;
+    t = frame / 50;
+    level = 0.675 + 0.325 * Math.Cos(2 * Math.Pi * t / 2.6);
+    dot_sprite.SetOpacity(level);
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# Password or question (only if the system ever needs one): small text under the logo
+prompt_sprite = Sprite();
+answer_sprite = Sprite();
+
+fun show_prompt(text, bullets) {
+    prompt_sprite.SetImage(Image.Text(text, 0.63, 0.63, 0.67));
+    prompt_sprite.SetPosition(Window.GetX() + (screen_w - prompt_sprite.GetImage().GetWidth()) / 2, y + h + 20, 3);
+    answer_sprite.SetImage(Image.Text(bullets, 0.96, 0.96, 0.96));
+    answer_sprite.SetPosition(Window.GetX() + (screen_w - answer_sprite.GetImage().GetWidth()) / 2, y + h + 50, 3);
+}
+
+fun display_password_callback(prompt, bullets) {
+    stars = "";
+    for (i = 0; i < bullets; i++)
+        stars = stars + "*";
+    show_prompt(prompt, stars);
+}
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+fun display_question_callback(prompt, entry) {
+    show_prompt(prompt, entry);
+}
+Plymouth.SetDisplayQuestionFunction(display_question_callback);
+
+fun display_normal_callback() {
+    prompt_sprite.SetOpacity(0);
+    answer_sprite.SetOpacity(0);
+}
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+
+# Messages (for example disk checks) appear small at the bottom
+message_sprite = Sprite();
+fun message_callback(text) {
+    message_sprite.SetImage(Image.Text(text, 0.63, 0.63, 0.67));
+    message_sprite.SetPosition(Window.GetX() + (screen_w - message_sprite.GetImage().GetWidth()) / 2, Window.GetY() + screen_h * 0.9, 3);
+}
+Plymouth.SetMessageFunction(message_callback);
