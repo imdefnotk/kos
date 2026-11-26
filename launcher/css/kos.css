@@ -484,3 +484,45 @@ main { position: absolute; inset: 0; }
 .toast::before { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 #padStatus { cursor: pointer; }
+
+/* ---------- Controller friendly badges ---------- */
+
+.hero-badges { display: flex; gap: 12px; flex-wrap: wrap; margin-top: -8px; }
+.chip-badge {
+  display: inline-flex; align-items: center; gap: 10px; height: 40px; padding: 0 18px; border-radius: 20px;
+  font-size: 18px; font-weight: 600; background: rgba(31,31,35,0.9); border: 1px solid var(--line); color: var(--soft);
+}
+.chip-badge::before { content: ''; width: 10px; height: 10px; border-radius: 50%; background: #71717A; }
+.chip-badge.good::before { background: #22C55E; }
+.chip-badge.ok::before { background: #EAB308; }
+.chip-badge.bad::before { background: #E5322D; }
+.launch-info { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 1000px; }
+.launch-info span { font-size: 21px; color: var(--soft); text-align: center; line-height: 1.45; }
+
+/* ---------- In-game menu and picker ---------- */
+
+.ingame-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ingame-hint { font-size: 20px; color: var(--muted); text-align: center; }
+.picker-box { width: 1400px; max-height: 900px; }
+.picker-list {
+  max-height: 720px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; padding: 6px;
+}
+.picker-head { grid-column: 1 / -1; font-size: 16px; font-weight: 600; letter-spacing: 0.14em; color: var(--muted); margin-top: 10px; text-transform: uppercase; }
+.pick {
+  height: 72px; padding: 0 18px; border-radius: 16px; border: 2px solid var(--line); background: var(--panel);
+  color: var(--ink); font-size: 20px; font-weight: 500; text-align: left;
+}
+.pick.current { border-color: var(--accent); }
+.pick.focused { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+
+/* ---------- Ayarlar > Kumanda Tuşları ---------- */
+
+#settingsPane { max-height: 760px; padding-right: 8px; }
+.pane-sub { font-family: 'Space Grotesk', sans-serif; font-size: 32px; font-weight: 700; margin-top: 18px; }
+.ctl-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ctl-row { padding: 14px 18px; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px; }
+.ctl-row b { font-size: 20px; font-weight: 600; }
+.ctl-btn { height: 54px; font-size: 17px; padding: 0 16px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctl-btn.hold { color: var(--muted); }
+.ctl-game .badges { display: flex; gap: 10px; flex-wrap: wrap; }
+.ctl-game .chip-badge { height: 32px; font-size: 15px; padding: 0 12px; }

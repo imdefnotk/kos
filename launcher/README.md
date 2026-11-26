@@ -86,7 +86,7 @@ See `demo-art/README.txt`. Logos you put there show on the tiles but are never u
 | `css/fonts.css`, `fonts/` | Inter and Space Grotesk, stored locally with Turkish characters (SIL Open Font License) |
 | `js/data.js` | Games, apps, store items and settings lists |
 | `js/app.js` | Navigation, controller, theme and everything that moves |
-| `kos-home-helper.py` | The helper: Steam library, pictures, starting games and K.OS apps. Only reachable from this computer (127.0.0.1:47800) |
+| `kos-home-helper.py` | The helper: Steam library, pictures, controller support and Steam Deck status (from Steam's game info cache), starting and closing games, controller layouts, K.OS apps. Only reachable from this computer (127.0.0.1:47800) |
 | `K.OS Launcher.cmd` | Windows starter: helper + full-screen mode |
 | `/usr/bin/kos-home` (in the K.OS image) | K.OS starter: helper + K.OS Home shell (Electron, full screen, no browser parts) |
 | `demo-art/` | Private logo folder (ignored by Git) |

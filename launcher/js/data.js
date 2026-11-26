@@ -152,6 +152,7 @@ window.KOS_DATA = {
   settingsCategories: [
     { id: 'internet', name: 'İnternet' },
     { id: 'bluetooth', name: 'Bluetooth ve Kumandalar' },
+    { id: 'kumanda', name: 'Kumanda Tuşları' },
     { id: 'ekran', name: 'Ekran' },
     { id: 'ses', name: 'Ses' },
     { id: 'guc', name: 'Güç ve Uyku' },

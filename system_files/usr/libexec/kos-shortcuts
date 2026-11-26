@@ -1,0 +1,250 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+K.OS keyboard shortcuts for the K.OS session.
+
+The K.OS session keeps only a few window shortcuts, like a console:
+  Alt+Tab / Alt+Shift+Tab   switch between K.OS Home, games and apps
+  Alt+F4                    close a game or app (K.OS Home itself refuses to close)
+Everything else is off: no Meta key menu, no overview, no shortcuts that open
+programs (Konsole, file manager), no hot corners. The VT switch Ctrl+Alt+F3
+(text console, the owner's recovery path) is not a KDE shortcut and still works.
+
+KDE keeps all shortcuts in one file (~/.config/kglobalshortcutsrc), shared with
+the developer Plasma desktop. So:
+  kos-shortcuts apply     (kos-start-session, before the K.OS session starts)
+      saves the Plasma version once, then writes the K.OS version
+  kos-shortcuts restore   (kos-start-session, before Plasma starts)
+      puts the Plasma version back
+Hot corners (screen edges) are switched the same way in kwinrc.
+Safe to run any number of times.
+"""
+
+import configparser
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+CONFIG = os.environ.get("XDG_CONFIG_HOME", os.path.join(HOME, ".config"))
+STATE = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.join(HOME, ".local", "state")), "kos")
+SHORTCUTS = os.path.join(CONFIG, "kglobalshortcutsrc")
+BACKUP = os.path.join(STATE, "kglobalshortcutsrc.plasma")
+MARK = os.path.join(STATE, "shortcuts-kos.json")
+
+# Shortcuts the K.OS session keeps (KWin action names)
+KEEP = {
+    "Walk Through Windows": "Alt+Tab",
+    "Walk Through Windows (Reverse)": "Alt+Shift+Tab",
+    "Window Close": "Alt+F4",
+}
+# K.OS window actions from the K.OS Console KWin script: no keys, run through D-Bus
+KOS_ACTIONS = ("KOS Show Home", "KOS Resume Game", "KOS Toggle Home")
+
+# KWin actions that have keys by default (from KWin's source), switched off even
+# when Plasma never ran on this machine and the file does not list them yet
+KWIN_DEFAULTS = [
+    "Activate Window Demanding Attention", "Cycle Overview", "Cycle Overview Opposite", "Decrease Opacity",
+    "Edit Tiles", "Expose", "ExposeAll", "ExposeClass", "ExposeClassCurrentDesktop", "Grid View",
+    "Increase Opacity", "Invert", "Invert Screen Colors", "InvertWindow", "Kill Window", "MoveMouseToCenter",
+    "MoveMouseToFocus", "MoveZoomDown", "MoveZoomLeft", "MoveZoomRight", "MoveZoomUp", "Overview",
+    "Setup Window Shortcut", "Show Desktop", "Switch One Desktop Down", "Switch One Desktop Up",
+    "Switch One Desktop to the Left", "Switch One Desktop to the Right", "Switch Window Down",
+    "Switch Window Left", "Switch Window Right", "Switch Window Up", "Switch to Last-Used Keyboard Layout",
+    "Switch to Next Desktop", "Switch to Next Keyboard Layout", "Switch to Next Screen",
+    "Switch to Previous Desktop", "Switch to Previous Screen", "Switch to Screen Above",
+    "Switch to Screen Below", "Switch to Screen to the Left", "Switch to Screen to the Right",
+    "Toggle Night Color", "ToggleCurrentThumbnail", "ToggleMouseClick", "Toggle Window Raise/Lower",
+    "TrackMouse", "ClearMouseMarks", "ClearLastMouseMark",
+    "Walk Through Windows Alternative", "Walk Through Windows Alternative (Reverse)",
+    "Walk Through Windows of Current Application", "Walk Through Windows of Current Application (Reverse)",
+    "Walk Through Windows of Current Application Alternative",
+    "Walk Through Windows of Current Application Alternative (Reverse)",
+    "Window Above Other Windows", "Window Below Other Windows", "Window Fullscreen", "Window Grow Horizontal",
+    "Window Grow Vertical", "Window Lower", "Window Maximize", "Window Maximize Horizontal",
+    "Window Maximize Vertical", "Window Minimize", "Window Move", "Window Move Center", "Window No Border",
+    "Window On All Desktops", "Window One Desktop Down", "Window One Desktop Up",
+    "Window One Desktop to the Left", "Window One Desktop to the Right", "Window One Screen Down",
+    "Window One Screen Up", "Window One Screen to the Left", "Window One Screen to the Right",
+    "Window Operations Menu", "Window Pack Down", "Window Pack Left", "Window Pack Right", "Window Pack Up",
+    "Window Quick Tile Bottom", "Window Quick Tile Bottom Left", "Window Quick Tile Bottom Right",
+    "Window Quick Tile Left", "Window Quick Tile Right", "Window Quick Tile Top", "Window Quick Tile Top Left",
+    "Window Quick Tile Top Right", "Window Raise", "Window Resize", "Window Restore", "Window Shrink Horizontal",
+    "Window Shrink Vertical", "Window to Next Desktop", "Window to Next Screen", "Window to Previous Desktop",
+    "Window to Previous Screen", "view_actual_size", "view_zoom_in", "view_zoom_out",
+    "disableInputCapture", "Move Tablet to Next LogicalOutput",
+] + ["Switch to Desktop %d" % i for i in range(1, 21)] \
+  + ["Window to Desktop %d" % i for i in range(1, 21)] \
+  + ["Switch to Screen %d" % i for i in range(0, 8)] \
+  + ["Window to Screen %d" % i for i in range(0, 8)]
+
+# kwinrc keys for hot corners and edge gestures (group, key, K.OS value)
+KWINRC = [
+    ("ElectricBorders", "TopLeft", "None"), ("ElectricBorders", "Top", "None"),
+    ("ElectricBorders", "TopRight", "None"), ("ElectricBorders", "Right", "None"),
+    ("ElectricBorders", "BottomRight", "None"), ("ElectricBorders", "Bottom", "None"),
+    ("ElectricBorders", "BottomLeft", "None"), ("ElectricBorders", "Left", "None"),
+    ("Effect-overview", "BorderActivate", "9"), ("Effect-overview", "TouchBorderActivate", "9"),
+    ("Effect-windowview", "BorderActivate", "9"), ("Effect-windowview", "BorderActivateAll", "9"),
+    ("Effect-windowview", "BorderActivateClass", "9"), ("Effect-windowview", "TouchBorderActivate", "9"),
+    ("TouchEdges", "Top", "None"), ("TouchEdges", "Bottom", "None"),
+    ("TouchEdges", "Left", "None"), ("TouchEdges", "Right", "None"),
+]
+
+
+def read_ini(path):
+    cp = configparser.RawConfigParser(delimiters=("=",), strict=False, interpolation=None,
+                                      comment_prefixes=("#",), empty_lines_in_values=False)
+    cp.optionxform = str
+    try:
+        cp.read(path, encoding="utf-8")
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        pass
+    return cp
+
+
+def launcher_desktop_files():
+    """Programs with their own launch shortcut (X-KDE-Shortcuts), like Konsole."""
+    found = set()
+    dirs = ["/usr/share/applications", "/usr/local/share/applications",
+            os.path.join(HOME, ".local", "share", "applications"),
+            "/var/lib/flatpak/exports/share/applications",
+            os.path.join(HOME, ".local", "share", "flatpak", "exports", "share", "applications")]
+    for d in dirs:
+        for f in glob.glob(os.path.join(d, "*.desktop")):
+            try:
+                with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                    if "X-KDE-Shortcuts" in fh.read():
+                        found.add(os.path.basename(f))
+            except OSError:
+                pass
+    return sorted(found)
+
+
+def kos_version(source):
+    """Text of the K.OS shortcut file, built from the Plasma one."""
+    groups = {}
+    order = []
+
+    def put(group, key, value):
+        if group not in groups:
+            groups[group] = {}
+            order.append(group)
+        groups[group][key] = value
+
+    for group in source.sections():
+        for key, value in source.items(group):
+            if group == "$Version" or key.startswith("_k_friendly_name"):
+                put(group, key, value)
+                continue
+            parts = value.split(",")
+            if group == "kwin" and key in KEEP:
+                put(group, key, "%s,%s,%s" % (KEEP[key], KEEP[key], parts[-1] if len(parts) > 2 else key))
+            elif group == "kwin" and key in KOS_ACTIONS:
+                put(group, key, value)
+            elif len(parts) >= 3:
+                put(group, key, "none," + ",".join(parts[1:]))
+            else:
+                put(group, key, "none")
+    for key in KWIN_DEFAULTS:
+        if key not in groups.get("kwin", {}):
+            put("kwin", key, "none,none,%s" % key)
+    for key, keys in KEEP.items():
+        if key not in groups.get("kwin", {}):
+            put("kwin", key, "%s,%s,%s" % (keys, keys, key))
+    for f in launcher_desktop_files():
+        g = "services][" + f
+        if "_launch" not in groups.get(g, {}):
+            put(g, "_launch", "none")
+    lines = []
+    for g in order:
+        lines.append("[%s]" % g)
+        for k, v in groups[g].items():
+            lines.append("%s=%s" % (k, v))
+        lines.append("")
+    return "\n".join(lines)
+
+
+def kread(group, key):
+    tool = shutil.which("kreadconfig6") or shutil.which("kreadconfig5")
+    if not tool:
+        return None
+    r = subprocess.run([tool, "--file", "kwinrc", "--group", group, "--key", key, "--default", "\x01"],
+                       capture_output=True, text=True, timeout=10)
+    v = r.stdout.rstrip("\n")
+    return None if v == "\x01" else v
+
+
+def kwrite(group, key, value):
+    tool = shutil.which("kwriteconfig6") or shutil.which("kwriteconfig5")
+    if not tool:
+        return
+    if value is None:
+        subprocess.run([tool, "--file", "kwinrc", "--group", group, "--key", key, "--delete"], timeout=10)
+    else:
+        subprocess.run([tool, "--file", "kwinrc", "--group", group, "--key", key, value], timeout=10)
+
+
+def apply():
+    os.makedirs(STATE, exist_ok=True)
+    if not os.path.exists(MARK):
+        # First K.OS start since Plasma: keep Plasma's own settings safe
+        saved = {"hadFile": os.path.isfile(SHORTCUTS), "kwinrc": {}}
+        if saved["hadFile"]:
+            shutil.copy2(SHORTCUTS, BACKUP)
+        for group, key, _ in KWINRC:
+            saved["kwinrc"]["%s/%s" % (group, key)] = kread(group, key)
+        with open(MARK + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(saved, f)
+        os.replace(MARK + ".tmp", MARK)
+    source = read_ini(BACKUP if os.path.isfile(BACKUP) else "/nonexistent")
+    text = kos_version(source)
+    os.makedirs(os.path.dirname(SHORTCUTS), exist_ok=True)
+    with open(SHORTCUTS + ".kos-tmp", "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(SHORTCUTS + ".kos-tmp", SHORTCUTS)
+    for group, key, value in KWINRC:
+        kwrite(group, key, value)
+    print("K.OS shortcuts on")
+
+
+def restore():
+    if not os.path.exists(MARK):
+        print("Plasma shortcuts already in place")
+        return
+    try:
+        with open(MARK, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        saved = {"hadFile": os.path.isfile(BACKUP), "kwinrc": {}}
+    if saved.get("hadFile") and os.path.isfile(BACKUP):
+        shutil.copy2(BACKUP, SHORTCUTS)
+    elif os.path.isfile(SHORTCUTS):
+        os.remove(SHORTCUTS)
+    for group, key, _ in KWINRC:
+        kwrite(group, key, (saved.get("kwinrc") or {}).get("%s/%s" % (group, key)))
+    os.remove(MARK)
+    print("Plasma shortcuts restored")
+
+
+def main():
+    what = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        if what == "apply":
+            apply()
+        elif what == "restore":
+            restore()
+        else:
+            print("usage: kos-shortcuts apply|restore")
+            return 2
+    except Exception as e:  # noqa: BLE001 (never stop the session from starting)
+        print("kos-shortcuts: %s" % e, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

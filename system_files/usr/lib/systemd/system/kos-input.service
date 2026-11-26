@@ -1,0 +1,15 @@
+[Unit]
+Description=K.OS controller layer (Xbox button for K.OS Home, button layouts per game)
+Documentation=file:///usr/libexec/kos-input
+After=systemd-udevd.service systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/kos-input
+# Always give the real controllers back to everyone, even after a crash
+ExecStopPost=-/usr/bin/udevadm trigger --action=change --subsystem-match=input --subsystem-match=hidraw
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

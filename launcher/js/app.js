@@ -39,7 +39,10 @@
     installing: {},
     memory: {},
     padConnected: false,
-    online: navigator.onLine
+    online: navigator.onLine,
+    running: null,
+    picker: null,
+    ctl: null
   };
 
   var prefs = {
@@ -146,9 +149,12 @@
     opts = opts || {};
     var ctrl = window.AbortController ? new AbortController() : null;
     var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, opts.timeout || 6000) : null;
+    var headers = opts.method === 'POST' ? { 'X-KOS': '1' } : {};
+    if (opts.body) { headers['Content-Type'] = 'application/json'; }
     return fetch(path, {
       method: opts.method || 'GET',
-      headers: opts.method === 'POST' ? { 'X-KOS': '1' } : {},
+      headers: headers,
+      body: opts.body,
       cache: 'no-store',
       signal: ctrl ? ctrl.signal : undefined
     }).then(function (r) {
@@ -189,7 +195,8 @@
         save: s.updating ? 'Güncelleniyor' : lastText(s.lastPlayed),
         progress: sizeText(s.sizeBytes),
         achievement: null, friend: null, bg: '#1F1F23', art: '',
-        img: '/api/art/' + s.appid + '/portrait'
+        img: '/api/art/' + s.appid + '/portrait',
+        controller: s.controller || null, deck: typeof s.deck === 'number' ? s.deck : null
       };
     });
     D.games = real.concat(base.soon);
@@ -366,8 +373,11 @@
         '<div class="hero-meta">' + [g.played, g.save, g.progress].filter(Boolean).map(function (t, i) {
           return (i ? '<span class="sep">/</span>' : '') + '<span>' + esc(t) + '</span>';
         }).join('') + '</div>' +
+        badgesHtml(g) +
         '<div class="hero-actions">' +
-        '<button type="button" class="btn primary f" ' + heroBtn + ' data-action="launch:' + g.id + '"><span class="dot"></span>Oyna</button>' +
+        (state.running && state.running.appid === g.steamAppId ?
+          '<button type="button" class="btn primary f" ' + heroBtn + ' data-action="game:resume"><span class="dot"></span>Oyuna dön</button>' :
+          '<button type="button" class="btn primary f" ' + heroBtn + ' data-action="launch:' + g.id + '"><span class="dot"></span>Oyna</button>') +
         '<button type="button" class="btn f" ' + heroBtn + ' data-action="demo:Oyun sayfası bir sonraki adımda gelecek.">Oyun Sayfası</button>' +
         '<button type="button" class="btn round f" ' + heroBtn + ' data-action="demo:Diğer seçenekler bir sonraki adımda gelecek." aria-label="Diğer seçenekler">' + ICON.more + '</button>' +
         '</div>';
@@ -521,6 +531,7 @@
   function renderSettingsPane() {
     var cat = D.settingsCategories.filter(function (c) { return c.id === state.settingsCat; })[0];
     var pane = $('#settingsPane');
+    if (cat.id === 'kumanda') { renderControllerPane(pane); return; }
     if (cat.id === 'ekran') {
       var sizes = [['normal', 'Normal'], ['buyuk', 'Büyük'], ['cokbuyuk', 'Çok büyük']];
       pane.innerHTML = '<h1>Ekran</h1>' +
@@ -567,6 +578,334 @@
       '<div class="panel plan"><span class="plan-kicker">BU SAYFADA OLACAKLAR</span><ul>' +
       items.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
       '<p>Bu sayfa 4. aşamada sistem ayarlarına bağlanacak.</p></div>' + extra;
+  }
+
+
+  /* ---------- Controller friendly badges (from Steam's own game info) ---------- */
+
+  function deckBadge(g) {
+    if (g.deck === 3) { return '<span class="chip-badge good">Steam Deck Doğrulandı</span>'; }
+    if (g.deck === 2) { return '<span class="chip-badge ok">Steam Deck: Oynanabilir</span>'; }
+    if (g.deck === 1) { return '<span class="chip-badge bad">Steam Deck: Desteklenmiyor</span>'; }
+    return '';
+  }
+
+  function ctlBadge(g) {
+    if (g.controller === 'full') { return '<span class="chip-badge good">Kumandayla tam uyumlu</span>'; }
+    if (g.controller === 'partial') { return '<span class="chip-badge ok">Kısmi kumanda desteği</span>'; }
+    if (g.controller === 'none') { return '<span class="chip-badge bad">Klavye ve fare oyunu</span>'; }
+    return '';
+  }
+
+  function badgesHtml(g) {
+    var html = deckBadge(g) + ctlBadge(g);
+    return html ? '<div class="hero-badges">' + html + '</div>' : '';
+  }
+
+  function launchInfo(g) {
+    var lines = [];
+    if (g.deck === 3) { lines.push('Steam Deck Doğrulandı: K.OS\'ta sorunsuz çalışması beklenir.'); }
+    if (g.deck === 1) { lines.push('Steam Deck\'te desteklenmiyor: K.OS\'ta sorun çıkarabilir. Sorun olursa Windows\'ta oynayın.'); }
+    if (g.controller === 'full') { lines.push('Kumandayla tam uyumlu.'); }
+    if (g.controller === 'partial') { lines.push('Kısmi kumanda desteği: bazı menüler klavye isteyebilir. Xbox tuşu + View = Esc.'); }
+    if (g.controller === 'none') { lines.push('Klavye ve fare için yapılmış bir oyun. K.OS, kumandayı klavye gibi kullanır (Ayarlar > Kumanda Tuşları).'); }
+    return lines.map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('');
+  }
+
+  /* ---------- Running game: Xbox button brings K.OS Home over it (PS5 style) ---------- */
+
+  function checkRunning(showMenu) {
+    if (!live.on || live.platform !== 'linux') { return; }
+    api('/api/running', { timeout: 3000 }).then(function (r) {
+      var before = state.running ? state.running.appid : null;
+      state.running = r && r.appid ? { appid: r.appid, name: r.name || 'Oyun' } : null;
+      var now = state.running ? state.running.appid : null;
+      if (before !== now && state.screen === 'home' && !state.overlay) { renderHero(D.home.indexOf(state.heroKey) < 0 ? 0 : D.home.indexOf(state.heroKey)); }
+      if (showMenu && state.running && (!state.overlay || state.overlay === 'launch')) {
+        if (state.overlay === 'launch') { closeOverlay(); }
+        openIngame();
+      }
+      if (!state.running && state.overlay === 'ingame') { closeOverlay(); }
+    }).catch(function () { /* helper busy: try again later */ });
+  }
+
+  function openIngame(note) {
+    if (!state.running) { return; }
+    $('#ingameTitle').textContent = state.running.name;
+    $('#ingameNote').textContent = note || 'Oyun arka planda açık';
+    var close = $('#ingame [data-action="game:close"]');
+    delete close.dataset.confirm;
+    $('b', close).textContent = 'Oyunu kapat';
+    $('small', close).textContent = 'Kaydedilmemiş ilerleme kaybolur';
+    openOverlay('ingame');
+  }
+
+  function gameAction(kind, el) {
+    if (kind === 'resume') {
+      closeOverlay();
+      api('/api/game/resume', { method: 'POST' }).then(function (r) {
+        if (!r.ok) { toast('Oyuna dönülemedi. Alt+Tab ile deneyin.'); }
+      }).catch(function () { toast('Oyuna dönülemedi.'); });
+    } else if (kind === 'close') {
+      if (!el.dataset.confirm) {
+        el.dataset.confirm = '1';
+        $('b', el).textContent = 'Kapatmak için tekrar bas';
+        $('small', el).textContent = 'Önce oyunda kaydettiğinden emin ol';
+        return;
+      }
+      closeOverlay();
+      api('/api/game/close', { method: 'POST' }).then(function (r) {
+        toast(r.ok ? 'Oyun kapatılıyor...' : 'Oyun kapatılamadı.');
+        setTimeout(function () { checkRunning(false); refreshLibrary(); }, 3000);
+      }).catch(function () { toast('Oyun kapatılamadı.'); });
+    } else {
+      closeOverlay();
+    }
+  }
+
+  /* ---------- Picker (choose one option from a list) ---------- */
+
+  function openPicker(title, note, options, current, done) {
+    $('#pickerTitle').textContent = title;
+    $('#pickerNote').textContent = note || '';
+    $('#pickerList').innerHTML = options.map(function (o, i) {
+      if (o.head) { return '<div class="picker-head">' + esc(o.head) + '</div>'; }
+      return '<button type="button" class="pick f' + (o.value === current ? ' current' : '') + '" data-group="picker" data-pick="' + i + '">' + esc(o.label) + '</button>';
+    }).join('');
+    state.picker = { options: options, done: done };
+    $('#pickerList').scrollTop = 0;
+    openOverlay('picker');
+    setFocus($('#pickerList .pick.current') || $('#pickerList .pick'));
+  }
+
+  function pick(el) {
+    var p = state.picker;
+    var o = p && p.options[parseInt(el.dataset.pick, 10)];
+    closeOverlay();
+    if (o && p.done) { p.done(o.value); }
+  }
+
+  /* ---------- Controller buttons (Ayarlar > Kumanda Tuşları) ---------- */
+
+  var BTN_LABEL = {
+    A: 'A', B: 'B', X: 'X', Y: 'Y', LB: 'LB', RB: 'RB', LT: 'LT', RT: 'RT', VIEW: 'View', MENU: 'Menü',
+    LS: 'Sol çubuk basma', RS: 'Sağ çubuk basma', UP: 'Yön tuşu yukarı', DOWN: 'Yön tuşu aşağı', LEFT: 'Yön tuşu sol', RIGHT: 'Yön tuşu sağ'
+  };
+  var KEY_LABEL = {
+    KEY_ESC: 'Esc', KEY_ENTER: 'Enter', KEY_SPACE: 'Boşluk', KEY_TAB: 'Tab', KEY_BACKSPACE: 'Geri silme',
+    KEY_LEFTSHIFT: 'Shift', KEY_LEFTCTRL: 'Ctrl', KEY_LEFTALT: 'Alt', KEY_UP: 'Yukarı ok', KEY_DOWN: 'Aşağı ok',
+    KEY_LEFT: 'Sol ok', KEY_RIGHT: 'Sağ ok', KEY_PAGEUP: 'Page Up', KEY_PAGEDOWN: 'Page Down'
+  };
+  var MOUSE_LABEL = { left: 'sol tık', right: 'sağ tık', middle: 'orta tık' };
+
+  function keyLabel(k) { return KEY_LABEL[k] || k.replace('KEY_', ''); }
+
+  function targetLabel(t, name) {
+    if (!t) { return name ? 'Kendisi (' + BTN_LABEL[name] + ')' : 'Yok'; }
+    if (t === 'none') { return 'Kapalı'; }
+    var i = t.indexOf(':');
+    var kind = t.slice(0, i);
+    var val = t.slice(i + 1);
+    if (kind === 'pad') { return 'Kumanda: ' + (BTN_LABEL[val] || val); }
+    if (kind === 'key') { return 'Klavye: ' + keyLabel(val); }
+    if (kind === 'mouse') { return 'Fare: ' + (MOUSE_LABEL[val] || val); }
+    return t;
+  }
+
+  function targetOptions(name, forHold) {
+    var o = state.ctl.options;
+    var list = [];
+    if (forHold) { list.push({ value: null, label: 'Yok (basılı tutmak farklı bir şey yapmaz)' }); }
+    else { list.push({ value: '', label: 'Kendisi (' + BTN_LABEL[name] + ')' }); }
+    list.push({ value: 'none', label: 'Kapalı' });
+    list.push({ head: 'Klavye' });
+    o.keys.forEach(function (k) { list.push({ value: 'key:' + k, label: keyLabel(k) }); });
+    list.push({ head: 'Fare' });
+    o.mouse.forEach(function (m) { list.push({ value: 'mouse:' + m, label: 'Fare ' + MOUSE_LABEL[m] }); });
+    list.push({ head: 'Kumanda tuşu' });
+    o.pad.forEach(function (p) { list.push({ value: 'pad:' + p, label: BTN_LABEL[p] }); });
+    return list;
+  }
+
+  function loadController(done) {
+    if (!live.on) { done(); return; }
+    api('/api/controller', { timeout: 4000 }).then(function (r) {
+      if (r && r.ok) {
+        var edit = state.ctl ? state.ctl.editing : 'standard';
+        state.ctl = { config: r.config, status: r.status, options: r.options, presets: r.presets, editing: edit };
+      }
+      done();
+    }).catch(function () { done(); });
+  }
+
+  function saveController(change, keepAction) {
+    api('/api/controller', { method: 'POST', body: JSON.stringify(change) }).then(function (r) {
+      if (!r || !r.ok) { throw new Error('save'); }
+      state.ctl.config = r.config;
+      redrawControllerPane(keepAction);
+    }).catch(function () { toast('Kumanda ayarı kaydedilemedi.'); });
+  }
+
+  function editingLayout() {
+    var c = state.ctl.config;
+    var ed = state.ctl.editing;
+    if (ed.indexOf('game:') === 0) {
+      var g = c.games[ed.slice(5)];
+      if (g && g.layout) { return g.layout; }
+      state.ctl.editing = ed = 'standard';
+    }
+    return c[ed];
+  }
+
+  function saveEditing(layout, keepAction) {
+    var ed = state.ctl.editing;
+    var change = {};
+    if (ed.indexOf('game:') === 0) {
+      change.games = {};
+      change.games[ed.slice(5)] = { mode: 'custom', layout: layout };
+    } else {
+      change[ed] = layout;
+    }
+    saveController(change, keepAction);
+  }
+
+  function redrawControllerPane(keepAction) {
+    if (state.settingsCat !== 'kumanda' || state.screen !== 'settings') { return; }
+    var box = $('#settingsPane');
+    var top = box.scrollTop;
+    renderSettingsPane();
+    box.scrollTop = top;
+    var el = keepAction ? $$('#settingsPane .f').filter(function (x) { return x.dataset.action === keepAction; })[0] : null;
+    if (el) { setFocus(el); } else if (state.focused && !document.body.contains(state.focused)) { setFocus($('#settingsNav .current')); }
+  }
+
+  function gameModeLabel(g) {
+    var c = state.ctl.config.games[String(g.steamAppId)] || { mode: 'auto' };
+    if (c.mode === 'standard') { return 'Standart düzen'; }
+    if (c.mode === 'keyboard') { return 'Klavye düzeni'; }
+    if (c.mode === 'custom') { return 'Özel düzen'; }
+    return 'Otomatik: ' + (g.controller === 'none' ? 'Klavye düzeni' : 'Standart düzen');
+  }
+
+  function renderControllerPane(pane) {
+    if (!live.on || live.platform !== 'linux') {
+      pane.innerHTML = '<h1>Kumanda Tuşları</h1><div class="panel plan"><span class="plan-kicker">K.OS\'TA</span><p>Kumanda tuşları K.OS\'ta ayarlanır. Bu bilgisayarda K.OS Home yardımcısı çalışmıyor veya bu Windows.</p></div>';
+      if (live.on && !state.ctl) { loadController(function () { if (state.settingsCat === 'kumanda') { renderSettingsPane(); } }); }
+      if (!state.ctl) { return; }
+    }
+    if (!state.ctl) {
+      pane.innerHTML = '<h1>Kumanda Tuşları</h1><div class="panel plan"><p>Yükleniyor...</p></div>';
+      loadController(function () { if (state.settingsCat === 'kumanda' && state.ctl) { renderSettingsPane(); } });
+      return;
+    }
+    var c = state.ctl.config;
+    var st = state.ctl.status || {};
+    var lay = editingLayout();
+    var ed = state.ctl.editing;
+    var statusText = !st.fresh ? 'K.OS kumanda katmanı çalışmıyor (kos-input servisi).' :
+      (st.pads && st.pads.length ? 'Bağlı: ' + st.pads.map(function (p) { return p.name; }).join(', ') : 'Bağlı kumanda yok.');
+    var g = ed.indexOf('game:') === 0 ? game('steam-' + ed.slice(5)) : null;
+    var edits = [['standard', 'Standart'], ['keyboard', 'Klavye oyunları']];
+    if (ed.indexOf('game:') === 0) { edits.push([ed, g ? g.name : 'Oyun']); }
+
+    var html = '<h1>Kumanda Tuşları</h1>' +
+      '<div class="panel row"><div class="row-text"><b>K.OS kumanda katmanı</b><span>' + esc(statusText) + '</span></div>' +
+      '<button type="button" role="switch" class="switch f" data-group="set-pane" data-action="ctlenable:" aria-checked="' + (c.enabled ? 'true' : 'false') + '" aria-label="K.OS kumanda katmanı"><span></span></button></div>' +
+      '<div class="panel plan"><span class="plan-kicker">HER ZAMAN</span><ul>' +
+      '<li>Xbox tuşu: K.OS Home açılır, oyun arkada devam eder. Tekrar basınca oyuna dönersin.</li>' +
+      '<li>Xbox tuşu basılıyken View: Esc (Undertale gibi oyunlardan çıkmak için).</li></ul></div>' +
+      '<div class="panel row"><div class="row-text"><b>Düzenlenen düzen</b><span>Standart: kumandalı oyunlar. Klavye oyunları: kumanda desteği olmayan oyunlar.</span></div><div class="seg">' +
+      edits.map(function (e) {
+        return '<button type="button" class="f" data-group="set-pane" data-action="ctledit:' + e[0] + '" aria-pressed="' + (ed === e[0]) + '">' + esc(e[1]) + '</button>';
+      }).join('') + '</div></div>';
+
+    html += '<div class="ctl-grid">' + state.ctl.options.buttons.map(function (n) {
+      var b = lay.buttons[n] || { tap: '', hold: null };
+      return '<div class="panel ctl-row"><b>' + esc(BTN_LABEL[n]) + '</b>' +
+        '<button type="button" class="btn ctl-btn f" data-group="set-pane" data-action="ctltap:' + n + '">' + esc(targetLabel(b.tap, n)) + '</button>' +
+        '<button type="button" class="btn ctl-btn hold f" data-group="set-pane" data-action="ctlhold:' + n + '">' +
+        (b.hold ? 'Basılı: ' + esc(targetLabel(b.hold).replace(/^(Klavye|Fare|Kumanda): /, '')) : 'Basılı: -') + '</button></div>';
+    }).join('') + '</div>';
+
+    var sticks = [['left', 'Sol çubuk', [['pad', 'Kumanda'], ['arrows', 'Ok tuşları'], ['wasd', 'W A S D']], lay.leftStick],
+                  ['right', 'Sağ çubuk', [['pad', 'Kumanda'], ['mouse', 'Fare']], lay.rightStick]];
+    html += sticks.map(function (s) {
+      return '<div class="panel row"><div class="row-text"><b>' + s[1] + '</b></div><div class="seg">' +
+        s[2].map(function (o) {
+          return '<button type="button" class="f" data-group="set-pane" data-action="ctlstick:' + s[0] + ':' + o[0] + '" aria-pressed="' + (s[3] === o[0]) + '">' + o[1] + '</button>';
+        }).join('') + '</div></div>';
+    }).join('');
+    html += '<div class="panel row"><div class="row-text"><b>Bu düzeni sıfırla</b><span>' +
+      (ed.indexOf('game:') === 0 ? 'Bu oyunun özel düzeni silinir, Otomatik\'e döner' : 'K.OS\'un hazır ayarına döner') + '</span></div>' +
+      '<button type="button" class="btn f" data-group="set-pane" data-action="ctlreset:">Sıfırla</button></div>';
+
+    var games = D.games.filter(function (x) { return x.live; });
+    if (games.length) {
+      html += '<h2 class="pane-sub">Oyunlara özel</h2>' + games.map(function (x) {
+        return '<div class="panel row ctl-game"><div class="row-text"><b>' + esc(x.name) + '</b><span class="badges">' + deckBadge(x) + ctlBadge(x) + '</span></div>' +
+          '<button type="button" class="btn f" data-group="set-pane" data-action="ctlgame:' + x.steamAppId + '">' + esc(gameModeLabel(x)) + '</button></div>';
+      }).join('');
+    }
+    pane.innerHTML = html;
+  }
+
+  function controllerAction(kind, arg) {
+    if (!state.ctl) { return; }
+    var lay = JSON.parse(JSON.stringify(editingLayout()));
+    var action = kind + ':' + arg;
+    if (kind === 'ctlenable') {
+      saveController({ enabled: !state.ctl.config.enabled }, action);
+      toast(state.ctl.config.enabled ? 'K.OS kumanda katmanı kapatılıyor...' : 'K.OS kumanda katmanı açılıyor...');
+    } else if (kind === 'ctledit') {
+      state.ctl.editing = arg;
+      redrawControllerPane(action);
+    } else if (kind === 'ctltap' || kind === 'ctlhold') {
+      var hold = kind === 'ctlhold';
+      var cur = lay.buttons[arg] || { tap: '', hold: null };
+      openPicker(BTN_LABEL[arg] + (hold ? ': basılı tutunca' : ''), hold ? 'Yarım saniye basılı tutunca ne yapsın?' : 'Bu tuş ne yapsın?',
+        targetOptions(arg, hold), hold ? cur.hold : cur.tap, function (value) {
+          lay.buttons[arg] = lay.buttons[arg] || { tap: '', hold: null };
+          if (hold) { lay.buttons[arg].hold = value; } else { lay.buttons[arg].tap = value; }
+          saveEditing(lay, action);
+        });
+    } else if (kind === 'ctlstick') {
+      var parts = arg.split(':');
+      lay[parts[0] === 'left' ? 'leftStick' : 'rightStick'] = parts[1];
+      saveEditing(lay, action);
+    } else if (kind === 'ctlreset') {
+      var ed = state.ctl.editing;
+      if (ed.indexOf('game:') === 0) {
+        var ch = { games: {} };
+        ch.games[ed.slice(5)] = null;
+        state.ctl.editing = 'standard';
+        saveController(ch, null);
+      } else {
+        saveController({ reset: ed }, action);
+      }
+      toast('Düzen sıfırlandı.');
+    } else if (kind === 'ctlgame') {
+      var g = game('steam-' + arg);
+      var entry = state.ctl.config.games[arg] || { mode: 'auto' };
+      openPicker(g ? g.name : 'Oyun', 'Bu oyunda kumanda nasıl çalışsın?', [
+        { value: 'auto', label: 'Otomatik (kumanda desteğine göre)' },
+        { value: 'standard', label: 'Standart düzen' },
+        { value: 'keyboard', label: 'Klavye düzeni' },
+        { value: 'custom', label: 'Özel düzen (bu oyuna özel tuşlar)' }
+      ], entry.mode, function (mode) {
+        var change = { games: {} };
+        if (mode === 'custom') {
+          var base = entry.layout || (entry.mode === 'keyboard' || (entry.mode === 'auto' && g && g.controller === 'none') ?
+            state.ctl.config.keyboard : state.ctl.config.standard);
+          change.games[arg] = { mode: 'custom', layout: base };
+          state.ctl.editing = 'game:' + arg;
+          saveController(change, 'ctledit:game:' + arg);
+          toast('Özel düzen hazır. Yukarıdan tuşları değiştirin.');
+        } else {
+          change.games[arg] = { mode: mode };
+          saveController(change, action);
+        }
+      });
+    }
   }
 
   /* ---------- Status bar ---------- */
@@ -644,7 +983,7 @@
   }
 
   function layer() {
-    if (state.overlay === 'power') { return $$('.f', $('#power')); }
+    if (state.overlay === 'power' || state.overlay === 'picker' || state.overlay === 'ingame') { return $$('.f', $('#' + state.overlay)); }
     if (state.overlay) { return []; }
     return $$('.topbar .f').concat($$('.f', $('#screen-' + state.screen)));
   }
@@ -681,6 +1020,8 @@
         c.classList.toggle('current', on);
         if (on) { c.setAttribute('aria-current', 'page'); } else { c.removeAttribute('aria-current'); }
       });
+      $('#settingsPane').scrollTop = 0;
+      if (state.settingsCat === 'kumanda') { state.ctl = null; }
       renderSettingsPane();
     }
     updateHints();
@@ -696,7 +1037,7 @@
     var cur = state.focused;
     var els = layer();
     if (!cur || !visible(cur) || els.indexOf(cur) === -1) {
-      if (state.overlay === 'power') { setFocus(els[0]); } else { focusFirstIn(state.screen); }
+      if (state.overlay) { if (els[0]) { setFocus(els[0]); } } else { focusFirstIn(state.screen); }
       return;
     }
     var a = cur.getBoundingClientRect();
@@ -743,6 +1084,7 @@
 
   function activate(el) {
     if (!el) { return; }
+    if (el.dataset.pick !== undefined) { sfx('select'); pick(el); return; }
     if (el.dataset.tab) { showScreen(el.dataset.tab); focusFirstIn(el.dataset.tab); return; }
     if (el.dataset.cat) {
       var firstOnPane = $('#settingsPane .f');
@@ -766,6 +1108,8 @@
     else if (kind === 'level') { setLevel(arg); }
     else if (kind === 'power') { powerAction(arg); }
     else if (kind === 'demo') { toast(arg); }
+    else if (kind === 'game') { gameAction(arg, el); }
+    else if (kind.indexOf('ctl') === 0) { controllerAction(kind, arg); }
     else if (kind === 'desktop') {
       toast('Masaüstüne geçiliyor...');
       api('/api/desktop', { method: 'POST' }).catch(function () { toast('Masaüstüne geçilemedi.'); });
@@ -811,11 +1155,17 @@
   function launchGame(g) {
     if (!g) { return; }
     if (g.soon) { toast(g.name + ' henüz PC\'de yok. Çıkınca haber vereceğiz (demo).'); return; }
+    if (state.running && g.live) {
+      if (state.running.appid === g.steamAppId) { gameAction('resume'); return; }
+      openIngame('Yeni bir oyun açmadan önce bu oyunu kapatın');
+      return;
+    }
     if (window.KOSAudio) { KOSAudio.duck(true); }
     openOverlay('launch');
     state.leftForGame = false;
     $('#launchTitle').textContent = g.name;
     $('#launchText').textContent = 'Başlatılıyor...';
+    $('#launchInfo').innerHTML = g.live ? launchInfo(g) : '';
     if (!g.live) {
       setTimeout(function () {
         if (state.overlay === 'launch') {
@@ -880,9 +1230,11 @@
     $('#' + name).hidden = false;
     if (name === 'power') {
       var g = state.screen === 'home' ? game(D.home[0]) : null;
+      if (live.on) { g = state.running; }
       $('#powerNote').textContent = g ? g.name + ' açık. Kapatmadan önce kaydedin.' : 'Ne yapmak istersiniz?';
       setFocus($('#power .power-btn'));
     }
+    if (name === 'ingame') { setFocus($('#ingame .power-btn')); }
     updateHints();
   }
 
@@ -923,7 +1275,8 @@
     var left = [hint('A', 'Seç'), hint('B', 'Geri')];
     var right = 'Menü tuşu: Güç';
     if (state.overlay === 'launch') { left = [hint('B', 'Geri dön')]; right = ''; }
-    else if (state.overlay === 'power') { left = [hint('A', 'Seç'), hint('B', 'Kapat')]; right = ''; }
+    else if (state.overlay === 'power' || state.overlay === 'picker') { left = [hint('A', 'Seç'), hint('B', 'Kapat')]; right = ''; }
+    else if (state.overlay === 'ingame') { left = [hint('A', 'Seç'), hint('B', 'K.OS Home')]; right = 'Xbox tuşu: oyuna dön'; }
     else {
       left.push(hint('LB', 'Önceki'));
       left.push(hint('RB', 'Sonraki'));
@@ -1147,6 +1500,7 @@
     KOSAudio.duck(document.hidden || !document.hasFocus() || state.overlay === 'launch');
   }
   window.addEventListener('blur', function () {
+    if (state.overlay === 'ingame' || state.overlay === 'picker') { closeOverlay(); }
     if (state.overlay === 'launch') {
       state.leftForGame = true;
       $('#launch').classList.add('playing');
@@ -1158,6 +1512,9 @@
     state.leftForGame = false;
     syncDuck();
     refreshLibrary();
+    // Back on K.OS Home while a game is still running (Xbox button): show the game
+    // menu. Wait a moment first: a game that just closed takes a second to end.
+    setTimeout(function () { if (document.hasFocus()) { checkRunning(true); } }, 1500);
   });
   document.addEventListener('visibilitychange', syncDuck);
 
@@ -1177,6 +1534,8 @@
       renderApps();
       showScreen('home');
       setFocus($('#homeRow .tile'));
+      checkRunning(false);
+      setInterval(function () { checkRunning(false); }, 5000);
     });
   });
 })();

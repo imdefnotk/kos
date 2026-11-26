@@ -14,6 +14,11 @@ what a web page cannot do on its own:
   - starts a Steam game when you press Oyna
   - on K.OS: opens the K.OS apps (Netflix, HBO Max, Xbox Bulut Oyun,
     Internet, Steam, Windows'a Gec)
+  - tells the launcher which games are controller friendly (from Steam's own
+    game info cache, or the Steam store when that is missing)
+  - on K.OS: knows which game is running, closes it on request, brings K.OS
+    Home back when it ends, and keeps the controller button layouts
+    (used by /usr/libexec/kos-input)
 
 It only listens on 127.0.0.1, so other devices on the network cannot reach it.
 It uses only Python's built-in parts, so nothing needs to be installed on K.OS.
@@ -40,7 +45,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
-VERSION = 1
+VERSION = 2
 DEFAULT_PORT = 47800
 IS_WINDOWS = os.name == "nt"
 STEAMID64_BASE = 76561197960265728
@@ -241,6 +246,7 @@ class Steam:
         self.lock = threading.Lock()
         self.cache = None
         self.cache_time = 0.0
+        self.traits = GameTraits()
 
     def snapshot(self):
         with self.lock:
@@ -286,6 +292,11 @@ class Steam:
                     "sizeBytes": to_int(iget(st, "SizeOnDisk")),
                     "updating": flags != 4,
                 }
+        traits = self.traits.get(root, list(games)) if games else {}
+        for appid, g in games.items():
+            t = traits.get(appid) or {}
+            g["controller"] = t.get("controller")
+            g["deck"] = t.get("deck")
         ordered = sorted(games.values(), key=lambda g: (-g["lastPlayed"], g["name"].lower()))
         return {"steamFound": True, "root": root, "userDir": user_dir, "user": persona, "games": ordered}
 
@@ -319,6 +330,592 @@ class Steam:
             if os.path.isfile(old):
                 return old
         return None
+
+
+
+# ---------------------------------------------------------------- game traits
+# "Controller friendly" and Steam Deck status for each installed game, read from
+# Steam's own game info cache on the drive (appcache/appinfo.vdf, or the newer
+# appcache/appinfo/appinfo_XX.vdf shard files), so no internet is needed.
+# controller: "full" | "partial" | "none" | None (unknown)
+# deck: 3 = Verified, 2 = Playable, 1 = Unsupported, 0 or None = unknown
+
+def _cstr(buf, pos):
+    end = buf.find(b"\x00", pos)
+    if end < 0:
+        raise ValueError("unterminated string")
+    return buf[pos:end].decode("utf-8", "replace"), end + 1
+
+
+def parse_binary_kv(buf, pos, strings=None, want=None):
+    """Valve's binary KeyValues. Returns (dict, new position). Keys are indexes
+    into `strings` when the file has a string table. `want` limits which top
+    level branches are kept (others are skipped while reading)."""
+    out = {}
+    while True:
+        t = buf[pos]
+        pos += 1
+        if t in (0x08, 0x0B):
+            return out, pos
+        if strings is not None:
+            idx = int.from_bytes(buf[pos:pos + 4], "little")
+            pos += 4
+            key = strings[idx] if idx < len(strings) else ""
+        else:
+            key, pos = _cstr(buf, pos)
+        if t == 0x00:
+            child, pos = parse_binary_kv(buf, pos, strings)
+            if want is None or key in want:
+                out[key] = child
+        elif t == 0x01:
+            out[key], pos = _cstr(buf, pos)
+        elif t in (0x02, 0x04, 0x06):
+            out[key] = int.from_bytes(buf[pos:pos + 4], "little", signed=True)
+            pos += 4
+        elif t == 0x03:
+            import struct
+            out[key] = struct.unpack_from("<f", buf, pos)[0]
+            pos += 4
+        elif t in (0x07, 0x0A):
+            out[key] = int.from_bytes(buf[pos:pos + 8], "little", signed=(t == 0x0A))
+            pos += 8
+        elif t == 0x05:  # wide string, never used in appinfo; skip to the double zero
+            end = pos
+            while buf[end:end + 2] != b"\x00\x00":
+                end += 2
+            out[key] = ""
+            pos = end + 2
+        else:
+            raise ValueError("unknown KeyValues type %d" % t)
+
+
+def _traits_from(data):
+    common = iget(data, "appinfo", "common") or {}
+    ctl = iget(common, "controller_support")
+    ctl = str(ctl).strip().lower() if ctl not in (None, "") else None
+    deck = iget(common, "steam_deck_compatibility", "category")
+    deck = to_int(deck, None) if deck is not None else None
+    return {"controller": ctl, "deck": deck}
+
+
+def _shard_of(appid):
+    h = appid & 0xFFFFFFFF
+    h ^= h >> 16
+    h = (h * 0x85EBCA6B) & 0xFFFFFFFF
+    h ^= h >> 13
+    h = (h * 0xC2B2AE35) & 0xFFFFFFFF
+    h ^= h >> 16
+    return h & 0xFF
+
+
+def _read_appinfo_single(path, appids):
+    """appinfo.vdf versions 39 to 41 (one big file)."""
+    import mmap
+    with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as buf:
+        return _scan_appinfo_single(buf, appids)
+
+
+def _scan_appinfo_single(buf, appids):
+    found = {}
+    magic = int.from_bytes(buf[0:4], "little")
+    version = magic & 0xFF
+    if magic >> 8 != 0x075644 or version < 39 or version > 41:
+        raise ValueError("unsupported appinfo version %x" % magic)
+    pos = 8
+    strings = None
+    if version >= 41:
+        table = int.from_bytes(buf[pos:pos + 8], "little")
+        pos += 8
+        count = int.from_bytes(buf[table:table + 4], "little")
+        strings = []
+        p = table + 4
+        for _ in range(count):
+            s, p = _cstr(buf, p)
+            strings.append(s)
+    while pos + 8 <= len(buf):
+        appid = int.from_bytes(buf[pos:pos + 4], "little")
+        if appid == 0:
+            break
+        size = int.from_bytes(buf[pos + 4:pos + 8], "little")
+        start = pos + 8
+        end = start + size
+        if appid in appids:
+            p = start + 4 + 4 + 8 + 20 + 4  # info state, updated, token, sha1, change number
+            if version >= 40:
+                p += 20
+            try:
+                data, _ = parse_binary_kv(buf, p, strings, want={"appinfo"})
+                found[appid] = _traits_from(data)
+            except (ValueError, IndexError):
+                pass
+        pos = end
+    return found
+
+
+def _read_appinfo_shard(path, appids):
+    """appinfo shard files (version 42, appcache/appinfo/appinfo_XX.vdf)."""
+    found = {}
+    with open(path, "rb") as f:
+        buf = f.read()
+    magic = int.from_bytes(buf[0:4], "little")
+    if magic >> 8 != 0x075644 or (magic & 0xFF) < 42:
+        raise ValueError("not an appinfo shard")
+    h = [int.from_bytes(buf[i:i + 4], "little") for i in range(8, 44, 4)]
+    _shard, _shards, app_count, index_size, string_count, string_size = h[:6]
+    index = 44
+    table = index + index_size
+    data_start = table + string_size
+    strings = []
+    p = table
+    for _ in range(string_count):
+        s, p = _cstr(buf, p)
+        strings.append(s)
+    p = index
+    for _ in range(app_count):
+        appid, off, size, summary = (int.from_bytes(buf[p + i:p + i + 4], "little") for i in (0, 4, 8, 12))
+        p += 16 + summary
+        if appid in appids:
+            try:
+                data, _ = parse_binary_kv(buf, data_start + off + 20, strings, want={"appinfo"})
+                found[appid] = _traits_from(data)
+            except (ValueError, IndexError):
+                pass
+    return found
+
+
+class GameTraits:
+    """Controller support and Steam Deck status, cached until Steam's files change."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cache = {}
+        self.stamp = None
+        self.read_at = 0.0
+        self.store = StoreTraits()
+
+    def get(self, root, appids):
+        appids = set(appids)
+        single = os.path.join(root, "appcache", "appinfo.vdf")
+        shard_dir = os.path.join(root, "appcache", "appinfo")
+        try:
+            if os.path.isdir(shard_dir):
+                stamp = ("shards", os.path.getmtime(shard_dir), tuple(sorted(appids)))
+            else:
+                stamp = ("single", os.path.getmtime(single), tuple(sorted(appids)))
+        except OSError:
+            stamp = None
+        with self.lock:
+            # Steam rewrites its cache often while it runs: re-read it when the list
+            # of games changes, or at most every 10 minutes
+            same_games = bool(stamp and self.stamp and stamp[0] == self.stamp[0] and stamp[2] == self.stamp[2])
+            if stamp != self.stamp and not (same_games and time.time() - self.read_at < 600):
+                self.read_at = time.time()
+                found = {}
+                try:
+                    if stamp and stamp[0] == "shards":
+                        by_shard = {}
+                        for a in appids:
+                            by_shard.setdefault(_shard_of(a), set()).add(a)
+                        for shard, ids in by_shard.items():
+                            f = os.path.join(shard_dir, "appinfo_%02x.vdf" % shard)
+                            if not os.path.isfile(f):
+                                f = os.path.join(shard_dir, "appinfo_%02X.vdf" % shard)
+                            if os.path.isfile(f):
+                                found.update(_read_appinfo_shard(f, ids))
+                    elif stamp:
+                        found = _read_appinfo_single(single, appids)
+                except (OSError, ValueError, IndexError) as err:
+                    log.warning("cannot read Steam game info: %s", err)
+                self.cache = found
+                self.stamp = stamp
+            result = dict(self.cache)
+        # Unknown here: ask the Steam store once (in the background, cached on disk)
+        missing = [a for a in appids if not (result.get(a) or {}).get("controller")]
+        for a in missing:
+            s = self.store.get(a)
+            if s:
+                merged = dict(result.get(a) or {"controller": None, "deck": None})
+                if not merged.get("controller"):
+                    merged["controller"] = s.get("controller")
+                result[a] = merged
+        return result
+
+
+class StoreTraits:
+    """Fallback: controller support from the Steam store (internet), remembered on disk."""
+
+    def __init__(self):
+        base = os.environ.get("LOCALAPPDATA") if IS_WINDOWS else os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+        self.path = os.path.join(base or os.path.expanduser("~"), "kos", "store-traits.json")
+        self.lock = threading.Lock()
+        self.data = {}
+        self.pending = set()
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                self.data = json.load(f)
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, appid):
+        key = str(appid)
+        with self.lock:
+            entry = self.data.get(key)
+            if entry and time.time() - entry.get("t", 0) < 30 * 86400:
+                return entry
+            if key in self.pending:
+                return entry
+            self.pending.add(key)
+        threading.Thread(target=self._fetch, args=(appid,), daemon=True).start()
+        return entry
+
+    def _fetch(self, appid):
+        from urllib.request import Request, urlopen
+        key = str(appid)
+        ctl = None
+        try:
+            req = Request("https://store.steampowered.com/api/appdetails?appids=%d&l=english" % appid,
+                          headers={"User-Agent": "K.OS Home"})
+            with urlopen(req, timeout=8) as r:
+                body = json.loads(r.read().decode("utf-8", "replace"))
+            d = (body.get(key) or {}).get("data") or {}
+            ctl = d.get("controller_support")
+            if not ctl:
+                cats = {c.get("id") for c in d.get("categories") or []}
+                ctl = "full" if 28 in cats else "partial" if 18 in cats else "none"
+            ok = True
+        except Exception as e:  # noqa: BLE001 (offline, blocked, odd answer: try again later)
+            log.info("store info for %d not available: %s", appid, e)
+            ok = False
+        with self.lock:
+            self.pending.discard(key)
+            if ok:
+                self.data[key] = {"controller": ctl, "t": int(time.time())}
+                try:
+                    os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                    tmp = self.path + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(self.data, f)
+                    os.replace(tmp, self.path)
+                except OSError:
+                    pass
+
+
+# ---------------------------------------------------------------- running game (K.OS only)
+
+def _proc_cmdline(pid):
+    try:
+        with open("/proc/%s/cmdline" % pid, "rb") as f:
+            return f.read().split(b"\x00")
+    except OSError:
+        return []
+
+
+def running_steam_games():
+    """{appid: [reaper pids]} for games Steam is running right now. Every game Steam
+    starts on Linux runs under a small 'reaper SteamLaunch AppId=<id>' process."""
+    found = {}
+    if IS_WINDOWS:
+        return found
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return found
+    for pid in pids:
+        args = _proc_cmdline(pid)
+        if b"SteamLaunch" not in args:
+            continue
+        for a in args:
+            if a.startswith(b"AppId="):
+                appid = to_int(a[6:].decode("ascii", "ignore"))
+                if appid > 0 and appid not in TOOL_APPIDS:
+                    found.setdefault(appid, []).append(int(pid))
+                break
+    return found
+
+
+def _children_map():
+    kids = {}
+    try:
+        for p in os.listdir("/proc"):
+            if not p.isdigit():
+                continue
+            try:
+                with open("/proc/%s/stat" % p, "r") as f:
+                    stat = f.read()
+                ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+                kids.setdefault(ppid, []).append(int(p))
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
+    return kids
+
+
+def close_steam_game(appid):
+    """Ends a running Steam game: asks every process of the game to close, then
+    forces whatever is still running after 6 seconds."""
+    import signal
+    reapers = running_steam_games().get(appid) or []
+    if not reapers:
+        return False
+    kids = _children_map()
+    tree = []
+    todo = list(reapers)
+    while todo:
+        p = todo.pop()
+        if p in tree:
+            continue
+        tree.append(p)
+        todo.extend(kids.get(p, []))
+    me = os.getpid()
+    victims = [p for p in tree if p != me]
+    # Children first, the reaper last, so Steam sees a normal game end
+    for p in reversed(victims):
+        try:
+            os.kill(p, signal.SIGTERM)
+        except OSError:
+            pass
+
+    def finish():
+        time.sleep(6)
+        for p in reversed(victims):
+            try:
+                os.kill(p, signal.SIGKILL)
+            except OSError:
+                pass
+    threading.Thread(target=finish, daemon=True).start()
+    return True
+
+
+def kwin_shortcut(name):
+    """Runs one of the K.OS window actions in the K.OS Console KWin script
+    (KOS Show Home, KOS Toggle Home, KOS Resume Game). K.OS only."""
+    if IS_WINDOWS or not shutil.which("gdbus"):
+        return False
+    base = ["gdbus", "call", "--session", "--dest", "org.kde.kglobalaccel",
+            "--object-path", "/component/kwin",
+            "--method", "org.kde.kglobalaccel.Component.invokeShortcut", "'%s'" % name]
+    for extra in ([], ["'default'"]):
+        try:
+            r = subprocess.run(base + extra, capture_output=True, timeout=5)
+            if r.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+    log.info("window action %s failed", name)
+    return False
+
+
+# ---------------------------------------------------------------- controller layouts
+# K.OS owns the controller (/usr/libexec/kos-input): every button can send a
+# controller button, a keyboard key or a mouse click, per game. The helper keeps
+# the layouts and tells kos-input which one to use right now.
+
+PAD_BUTTONS = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "VIEW", "MENU", "LS", "RS", "UP", "DOWN", "LEFT", "RIGHT"]
+PAD_TARGETS = ["A", "B", "X", "Y", "LB", "RB", "VIEW", "MENU", "LS", "RS"]
+KEY_TARGETS = [
+    "KEY_ESC", "KEY_ENTER", "KEY_SPACE", "KEY_TAB", "KEY_BACKSPACE", "KEY_LEFTSHIFT", "KEY_LEFTCTRL",
+    "KEY_LEFTALT", "KEY_UP", "KEY_DOWN", "KEY_LEFT", "KEY_RIGHT", "KEY_W", "KEY_A", "KEY_S", "KEY_D",
+    "KEY_Q", "KEY_E", "KEY_R", "KEY_F", "KEY_Z", "KEY_X", "KEY_C", "KEY_V", "KEY_I", "KEY_M", "KEY_P",
+    "KEY_1", "KEY_2", "KEY_3", "KEY_4", "KEY_F1", "KEY_F5", "KEY_F9", "KEY_PAGEUP", "KEY_PAGEDOWN",
+]
+MOUSE_TARGETS = ["left", "right", "middle"]
+STICK_LEFT = ["pad", "arrows", "wasd"]
+STICK_RIGHT = ["pad", "mouse"]
+
+
+def valid_target(t, allow_empty=True):
+    if t is None or t == "":
+        return allow_empty
+    if t == "none":
+        return True
+    kind, _, val = str(t).partition(":")
+    return ((kind == "pad" and val in PAD_TARGETS) or (kind == "key" and val in KEY_TARGETS)
+            or (kind == "mouse" and val in MOUSE_TARGETS))
+
+
+def preset_standard():
+    """Every button does what it says. (Xbox button + View = Escape always works,
+    see kos-input.)"""
+    b = {n: {"tap": "", "hold": None} for n in PAD_BUTTONS}
+    return {"buttons": b, "leftStick": "pad", "rightStick": "pad"}
+
+
+def preset_keyboard():
+    """For games made for keyboard and mouse."""
+    m = {
+        "A": "key:KEY_ENTER", "B": "key:KEY_ESC", "X": "key:KEY_Z", "Y": "key:KEY_X",
+        "LB": "key:KEY_Q", "RB": "key:KEY_E", "LT": "key:KEY_LEFTSHIFT", "RT": "key:KEY_LEFTCTRL",
+        "VIEW": "key:KEY_TAB", "MENU": "key:KEY_ESC", "LS": "key:KEY_LEFTSHIFT", "RS": "mouse:left",
+        "UP": "key:KEY_UP", "DOWN": "key:KEY_DOWN", "LEFT": "key:KEY_LEFT", "RIGHT": "key:KEY_RIGHT",
+    }
+    b = {n: {"tap": m.get(n, ""), "hold": None} for n in PAD_BUTTONS}
+    return {"buttons": b, "leftStick": "arrows", "rightStick": "mouse"}
+
+
+def clean_layout(raw, fallback):
+    """Keeps only known buttons and allowed actions; anything else uses the fallback."""
+    out = json.loads(json.dumps(fallback))
+    if not isinstance(raw, dict):
+        return out
+    btns = raw.get("buttons") if isinstance(raw.get("buttons"), dict) else {}
+    for n in PAD_BUTTONS:
+        v = btns.get(n)
+        if isinstance(v, dict):
+            if valid_target(v.get("tap")):
+                out["buttons"][n]["tap"] = v.get("tap") or ""
+            if v.get("hold") is None or valid_target(v.get("hold"), allow_empty=False):
+                out["buttons"][n]["hold"] = v.get("hold")
+    if raw.get("leftStick") in STICK_LEFT:
+        out["leftStick"] = raw["leftStick"]
+    if raw.get("rightStick") in STICK_RIGHT:
+        out["rightStick"] = raw["rightStick"]
+    return out
+
+
+class Controller:
+    MODES = ("auto", "standard", "keyboard", "custom")
+
+    def __init__(self):
+        base = os.environ.get("APPDATA") if IS_WINDOWS else os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+        self.dir = os.path.join(base or os.path.expanduser("~"), "kos")
+        self.path = os.path.join(self.dir, "controller.json")
+        self.active_path = os.path.join(self.dir, "controller-active.json")
+        self.lock = threading.Lock()
+        self.active_key = None
+
+    def load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            raw = {}
+        cfg = {
+            "enabled": raw.get("enabled", True) is not False,
+            "standard": clean_layout(raw.get("standard"), preset_standard()),
+            "keyboard": clean_layout(raw.get("keyboard"), preset_keyboard()),
+            "games": {},
+        }
+        games = raw.get("games") if isinstance(raw.get("games"), dict) else {}
+        for k, v in games.items():
+            if not str(k).isdigit() or not isinstance(v, dict):
+                continue
+            mode = v.get("mode") if v.get("mode") in self.MODES else "auto"
+            entry = {"mode": mode}
+            if isinstance(v.get("layout"), dict):
+                entry["layout"] = clean_layout(v["layout"], preset_standard())
+            cfg["games"][str(k)] = entry
+        return cfg
+
+    def save(self, raw):
+        cur = self.load()
+        if isinstance(raw, dict):
+            if "enabled" in raw:
+                cur["enabled"] = raw["enabled"] is not False
+            for name in ("standard", "keyboard"):
+                if isinstance(raw.get(name), dict):
+                    cur[name] = clean_layout(raw[name], preset_standard() if name == "standard" else preset_keyboard())
+            if isinstance(raw.get("games"), dict):
+                for k, v in raw["games"].items():
+                    if not str(k).isdigit():
+                        continue
+                    if v is None:
+                        cur["games"].pop(str(k), None)
+                        continue
+                    if not isinstance(v, dict):
+                        continue
+                    entry = {"mode": v.get("mode") if v.get("mode") in self.MODES else "auto"}
+                    if isinstance(v.get("layout"), dict):
+                        entry["layout"] = clean_layout(v["layout"], preset_standard())
+                    elif isinstance((cur["games"].get(str(k)) or {}).get("layout"), dict):
+                        entry["layout"] = cur["games"][str(k)]["layout"]
+                    cur["games"][str(k)] = entry
+            if raw.get("reset") in ("standard", "keyboard"):
+                cur[raw["reset"]] = preset_standard() if raw["reset"] == "standard" else preset_keyboard()
+        self._write(self.path, cur)
+        return cur
+
+    def resolve(self, appid, traits):
+        """Layout to use while `appid` runs (None = no game)."""
+        cfg = self.load()
+        if not appid:
+            return cfg, "standard", cfg["standard"]
+        g = cfg["games"].get(str(appid)) or {"mode": "auto"}
+        mode = g["mode"]
+        if mode == "custom" and isinstance(g.get("layout"), dict):
+            return cfg, "game", g["layout"]
+        if mode == "auto":
+            mode = "keyboard" if (traits or {}).get("controller") == "none" else "standard"
+        if mode == "keyboard":
+            return cfg, "keyboard", cfg["keyboard"]
+        return cfg, "standard", cfg["standard"]
+
+    def apply(self, appid, traits, force=False):
+        with self.lock:
+            cfg, source, layout = self.resolve(appid, traits)
+            active = {"enabled": cfg["enabled"], "appid": appid or None, "source": source, "layout": layout}
+            key = json.dumps(active, sort_keys=True)
+            if key == self.active_key and not force:
+                return active
+            self._write(self.active_path, active)
+            self.active_key = key
+            log.info("controller layout: %s (game %s)", source, appid or "-")
+            return active
+
+    def _write(self, path, data):
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, path)
+        except OSError as e:
+            log.warning("cannot save %s: %s", path, e)
+
+
+def input_layer_status():
+    """What /usr/libexec/kos-input reports (K.OS only)."""
+    try:
+        with open("/run/kos-input/status.json", "r", encoding="utf-8") as f:
+            st = json.load(f)
+        st["fresh"] = time.time() - float(st.get("time", 0)) < 15
+        return st
+    except (OSError, ValueError):
+        return {"running": False, "fresh": False, "pads": []}
+
+
+class GameWatcher:
+    """K.OS only: notices when a Steam game starts or ends. While a game runs its
+    controller layout is active; when it ends, K.OS Home comes back to the front."""
+
+    def __init__(self, server):
+        self.server = server
+        self.current = None
+        self.lock = threading.Lock()
+
+    def running(self):
+        with self.lock:
+            return self.current
+
+    def loop(self):
+        while True:
+            try:
+                games = running_steam_games()
+                appid = next(iter(sorted(games)), None) if games else None
+                with self.lock:
+                    before = self.current
+                    self.current = appid
+                if appid != before:
+                    traits = self.server.traits_for(appid) if appid else None
+                    self.server.controller.apply(appid, traits)
+                    if before and not appid:
+                        log.info("game %s ended, back to K.OS Home", before)
+                        kwin_shortcut("KOS Show Home")
+                    elif appid:
+                        log.info("game %s running", appid)
+            except Exception as e:  # noqa: BLE001 (never let the watcher die)
+                log.warning("game watcher: %s", e)
+            time.sleep(1.0)
 
 
 # ---------------------------------------------------------------- actions
@@ -450,6 +1047,20 @@ class Handler(BaseHTTPRequestHandler):
                             "games": snap["games"]})
             return
 
+        if path == "/api/running":
+            appid = self.server.watcher.running()
+            self.send_json({"ok": True, "appid": appid,
+                            "name": self.server.game_name(appid) if appid else ""})
+            return
+
+        if path == "/api/controller":
+            ctl = self.server.controller
+            self.send_json({"ok": True, "config": ctl.load(), "status": input_layer_status(),
+                            "options": {"buttons": PAD_BUTTONS, "pad": PAD_TARGETS, "keys": KEY_TARGETS,
+                                        "mouse": MOUSE_TARGETS, "leftStick": STICK_LEFT, "rightStick": STICK_RIGHT},
+                            "presets": {"standard": preset_standard(), "keyboard": preset_keyboard()}})
+            return
+
         m = re.match(r"^/api/art/(\d{1,10})/(portrait|hero|logo|header)$", path)
         if m:
             appid, kind = int(m.group(1)), m.group(2)
@@ -480,8 +1091,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.server.touch()
         length = to_int(self.headers.get("Content-Length"))
-        if length:
-            self.rfile.read(min(length, 65536))
+        body = self.rfile.read(min(length, 262144)) if length else b""
         # The custom header stops other web sites from sending these requests
         if not self.allowed() or self.headers.get("X-KOS") != "1":
             self.send_json({"ok": False, "error": "forbidden"}, 403)
@@ -492,12 +1102,36 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             appid = int(m.group(1))
             try:
+                # The game's controller layout is ready before the game opens
+                self.server.controller.apply(appid, self.server.traits_for(appid))
                 open_steam_url("steam://rungameid/%d" % appid)
                 log.info("launch %d", appid)
                 self.send_json({"ok": True})
             except Exception as e:  # noqa: BLE001 (report any failure to the launcher)
                 log.warning("launch %d failed: %s", appid, e)
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path == "/api/game/resume":
+            self.send_json({"ok": kwin_shortcut("KOS Resume Game")})
+            return
+
+        if path == "/api/game/close":
+            appid = self.server.watcher.running()
+            self.send_json({"ok": bool(appid) and close_steam_game(appid)})
+            return
+
+        if path == "/api/controller":
+            try:
+                raw = json.loads(body.decode("utf-8") or "{}")
+            except ValueError:
+                self.send_json({"ok": False, "error": "bad json"}, 400)
+                return
+            ctl = self.server.controller
+            cfg = ctl.save(raw)
+            appid = self.server.watcher.running()
+            ctl.apply(appid, self.server.traits_for(appid) if appid else None, force=True)
+            self.send_json({"ok": True, "config": cfg})
             return
 
         if path == "/api/desktop":
@@ -525,6 +1159,8 @@ class Server(ThreadingHTTPServer):
     def __init__(self, addr, root, idle_exit):
         self.root = os.path.realpath(root)
         self.steam = Steam()
+        self.controller = Controller()
+        self.watcher = GameWatcher(self)
         self.idle_exit = idle_exit
         self.last_seen = time.time()
         super().__init__(addr, Handler)
@@ -539,6 +1175,18 @@ class Server(ThreadingHTTPServer):
 
     def touch(self):
         self.last_seen = time.time()
+
+    def traits_for(self, appid):
+        for g in self.steam.snapshot().get("games", []):
+            if g["appid"] == appid:
+                return {"controller": g.get("controller"), "deck": g.get("deck")}
+        return None
+
+    def game_name(self, appid):
+        for g in self.steam.snapshot().get("games", []):
+            if g["appid"] == appid:
+                return g["name"]
+        return ""
 
 
 def main():
@@ -596,6 +1244,10 @@ def main():
                     server.shutdown()
                     return
         threading.Thread(target=watchdog, daemon=True).start()
+
+    if not IS_WINDOWS:
+        server.controller.apply(None, None, force=True)
+        threading.Thread(target=server.watcher.loop, daemon=True).start()
 
     log.info("K.OS Home helper running on http://127.0.0.1:%d/ (root %s)", args.port, server.root)
     try:

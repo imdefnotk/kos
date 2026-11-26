@@ -77,7 +77,7 @@
     <section class="screen padded" id="screen-settings" aria-label="Ayarlar">
       <div class="settings">
         <nav class="settings-nav" id="settingsNav" aria-label="Ayar kategorileri"></nav>
-        <div class="settings-pane" id="settingsPane"></div>
+        <div class="settings-pane scroll" id="settingsPane"></div>
       </div>
     </section>
   </main>
@@ -120,6 +120,43 @@
     <div class="launch-dot"></div>
     <h1 id="launchTitle"></h1>
     <p id="launchText"></p>
+    <div class="launch-info" id="launchInfo"></div>
+  </div>
+
+  <!-- A game is running behind K.OS Home (Xbox button) -->
+  <div class="overlay power" id="ingame" role="dialog" aria-modal="true" aria-labelledby="ingameTitle" hidden>
+    <div class="power-box">
+      <div class="power-head">
+        <h1 id="ingameTitle"></h1>
+        <span class="power-note" id="ingameNote"></span>
+      </div>
+      <div class="power-grid ingame-grid">
+        <button type="button" class="power-btn f has-dot" data-action="game:resume">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+          <span><b>Oyuna dön</b><small>Kaldığın yerden devam et</small></span>
+        </button>
+        <button type="button" class="power-btn f has-dot" data-action="game:close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+          <span><b>Oyunu kapat</b><small>Kaydedilmemiş ilerleme kaybolur</small></span>
+        </button>
+        <button type="button" class="power-btn f has-dot" data-action="game:home">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"></path><path d="M6 10v10h12V10"></path></svg>
+          <span><b>K.OS Home</b><small>Oyun arkada açık kalır</small></span>
+        </button>
+      </div>
+      <p class="ingame-hint">Xbox tuşu: oyuna dön &nbsp;/&nbsp; Xbox tuşu + View: Esc</p>
+    </div>
+  </div>
+
+  <!-- Choose one option (controller button actions and more) -->
+  <div class="overlay power" id="picker" role="dialog" aria-modal="true" aria-labelledby="pickerTitle" hidden>
+    <div class="power-box picker-box">
+      <div class="power-head">
+        <h1 id="pickerTitle"></h1>
+        <span class="power-note" id="pickerNote"></span>
+      </div>
+      <div class="picker-list scroll" id="pickerList"></div>
+    </div>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

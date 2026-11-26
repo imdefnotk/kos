@@ -3,8 +3,9 @@
 # session (K.OS logs in automatically, so normally that is right after power on).
 #
 # What you see in the K.OS session:
-#   no desktop, no taskbar, no Alt+Tab, no window shortcuts at all. Only
-#   K.OS Home, and the games and apps you open from it. Under the hood it is
+#   no desktop, no taskbar, no Meta key menu. Only K.OS Home, and the games
+#   and apps you open from it. Alt+Tab switches between them, Alt+F4 closes a
+#   game (never K.OS Home). See /usr/libexec/kos-shortcuts. Under the hood it is
 #   KWin (the KDE window manager) running with nothing but K.OS Home.
 #
 # Developer desktop mode (normal KDE Plasma desktop, both monitors):
@@ -41,6 +42,8 @@ start_plasma() {
         line="$(grep -m1 '^Exec=' /usr/share/wayland-sessions/plasma.desktop | cut -d= -f2-)"
     fi
     [ -n "${line}" ] || line="/usr/bin/startplasma-wayland"
+    # Plasma's own keyboard shortcuts and hot corners back (see kos-shortcuts)
+    /usr/libexec/kos-shortcuts restore >> "${LOG}" 2>&1 || true
     log "starting Plasma desktop: ${line}"
     exec /bin/sh -c "${line}"
 }
@@ -91,13 +94,16 @@ export KOS_SESSION=1
 KWIN="kwin_wayland_wrapper"
 command -v "${KWIN}" >/dev/null 2>&1 || KWIN="kwin_wayland"
 
+# Console shortcuts only: Alt+Tab, Alt+Shift+Tab, Alt+F4 (K.OS Home refuses to
+# close). No Meta key menu, no overview, no program shortcuts, no hot corners.
+/usr/libexec/kos-shortcuts apply >> "${LOG}" 2>&1 || true
+
 # --xwayland             : games and Steam that still use X11 work
 # --no-lockscreen        : a console never shows a lock screen
-# --no-global-shortcuts  : no Alt+Tab, no Alt+F4, no Meta key menu, no screen edges
 # --exit-with-session    : the session lasts as long as kos-shell (K.OS Home) runs
 log "starting K.OS session (${KWIN}, LANG=${LANG})"
 started=$(date +%s)
-"${KWIN}" --xwayland --no-lockscreen --no-global-shortcuts \
+"${KWIN}" --xwayland --no-lockscreen \
     --exit-with-session=/usr/libexec/kos-shell >> "${LOG}" 2>&1
 code=$?
 ran=$(( $(date +%s) - started ))

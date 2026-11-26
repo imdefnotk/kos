@@ -10,7 +10,8 @@ echo "Building K.OS target: ${KOS_TARGET} (${KOS_SESSION_MODE})"
 
 # 0. Extra packages: python3-evdev lets kos-remote turn the controller into a TV remote
 dnf5 -y install python3-evdev || dnf -y install python3-evdev
-python3 -c "import evdev"
+python3 -c "import evdev; from evdev import ff, UInput"
+command -v gdbus
 
 # 0b. Electron runs the K.OS Home shell (/usr/share/kos/shell) full screen with no
 #     browser parts. Downloaded from Electron's official GitHub releases and checked
@@ -69,6 +70,8 @@ sed -i 's/^NAME=.*/NAME="K.OS"/' /usr/lib/os-release
 #    kos-flatpak-setup = installs Google Chrome for the web tiles, retries until it succeeds
 systemctl enable kos-system-setup.service
 systemctl enable kos-flatpak-setup.service
+#    kos-input         = K.OS controller layer (Xbox button opens K.OS Home, button layouts)
+systemctl enable kos-input.service
 
 # 7. K.OS Home launcher files: readable by everyone, no Windows-only or private demo files
 rm -rf /usr/share/kos/home/demo-art "/usr/share/kos/home/K.OS Launcher.cmd"

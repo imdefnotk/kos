@@ -1,0 +1,786 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""
+K.OS controller layer.
+
+K.OS owns the controller, like a console does:
+  - the Xbox (guide) button belongs to K.OS: it brings up K.OS Home over a
+    running game, and goes back to the game when pressed again. Steam never
+    sees it, so it cannot open its own overlay or Big Picture with it.
+  - Xbox button + View = Escape, in every game (games like Undertale need
+    Escape to quit). Hold the Xbox button, press View.
+  - every button can do something else, per game: another controller button,
+    a keyboard key (for example Escape), or a mouse click. The left stick can
+    act as arrow keys or W A S D, the right stick as a mouse. Holding a button
+    can do something different from tapping it.
+The layouts are chosen in K.OS Home (Ayarlar > Kumanda Tuşları) and handed over by
+the K.OS Home helper in ~/.config/kos/controller-active.json.
+
+How it works: for every real controller it makes an exact copy (same name, same
+ids, same buttons, rumble included), hands the copy to games, Steam and K.OS
+Home, and hides the real one from them (its device files are locked while K.OS
+uses it). The real controller's buttons go through the active layout first.
+Hidden devices are always unlocked again when this program stops.
+
+Runs as a system service (kos-input.service), as root.
+Off switch: create /etc/kos/no-input-layer, or turn "K.OS kumanda katmanı" off
+in K.OS Home. Status: /run/kos-input/status.json. Log: journalctl -u kos-input
+"""
+
+import json
+import logging
+import os
+import pwd
+import select
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+try:
+    import evdev
+    from evdev import UInput, ecodes as e, ff
+except ImportError:
+    print("kos-input: python3-evdev is not installed", file=sys.stderr)
+    sys.exit(0)
+
+log = logging.getLogger("kos-input")
+
+OFF_SWITCH = "/etc/kos/no-input-layer"
+RUN_DIR = "/run/kos-input"
+STATUS = os.path.join(RUN_DIR, "status.json")
+SCAN_EVERY = 2.0
+TICK = 1.0 / 125
+HOLD_TIME = 0.5           # seconds before a hold action starts
+PULSE = 0.05              # a tap after a possible hold is sent as this short press
+STICK_KEY_ON = 0.55       # stick as keys: pressed above this
+STICK_KEY_OFF = 0.35      # ... released below this
+DEADZONE = 0.15
+MOUSE_SPEED = 1400.0      # pixels per second at full right stick
+STEAM_VENDOR = 0x28DE
+KEYS_DEVICE_NAME = "K.OS Controller Keys"
+
+BUTTON_NAMES = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "VIEW", "MENU", "LS", "RS",
+                "UP", "DOWN", "LEFT", "RIGHT"]
+DPAD = {"UP": (e.ABS_HAT0Y, -1), "DOWN": (e.ABS_HAT0Y, 1), "LEFT": (e.ABS_HAT0X, -1), "RIGHT": (e.ABS_HAT0X, 1)}
+DPAD_BTN = {"UP": e.BTN_DPAD_UP, "DOWN": e.BTN_DPAD_DOWN, "LEFT": e.BTN_DPAD_LEFT, "RIGHT": e.BTN_DPAD_RIGHT}
+MOUSE = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE}
+ALL_KEYS = sorted({c for n, c in e.ecodes.items() if n.startswith("KEY_") and 0 < c < 0x200})
+
+
+def standard_layout():
+    b = {n: {"tap": "", "hold": None} for n in BUTTON_NAMES}
+    return {"buttons": b, "leftStick": "pad", "rightStick": "pad"}
+
+
+# ---------------------------------------------------------------- settings from the user
+
+def active_user():
+    """(name, uid, home) of whoever is using the screen now, or None."""
+    try:
+        with open("/run/systemd/seats/seat0", "r") as f:
+            for line in f:
+                if line.startswith("ACTIVE_UID="):
+                    uid = int(line.split("=", 1)[1])
+                    pw = pwd.getpwuid(uid)
+                    return pw.pw_name, uid, pw.pw_dir
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
+def valid_target(t):
+    if t in (None, "", "none"):
+        return True
+    kind, _, val = str(t).partition(":")
+    if kind == "pad":
+        return val in BUTTON_NAMES and val not in ("LT", "RT", "UP", "DOWN", "LEFT", "RIGHT")
+    if kind == "key":
+        return val.startswith("KEY_") and e.ecodes.get(val) in ALL_KEYS
+    if kind == "mouse":
+        return val in MOUSE
+    return False
+
+
+def read_settings():
+    """Returns (enabled, layout, source). Never trusts the file blindly: it is
+    written by the user's own programs and read here as root."""
+    layout = standard_layout()
+    if os.path.exists(OFF_SWITCH):
+        return False, layout, "off-switch"
+    user = active_user()
+    if not user:
+        return True, layout, "standard"
+    path = os.path.join(user[2], ".config", "kos", "controller-active.json")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "r", encoding="utf-8") as f:
+            raw = json.loads(f.read(200000))
+    except (OSError, ValueError):
+        return True, layout, "standard"
+    if not isinstance(raw, dict):
+        return True, layout, "standard"
+    enabled = raw.get("enabled", True) is not False
+    src = raw.get("layout") if isinstance(raw.get("layout"), dict) else {}
+    btns = src.get("buttons") if isinstance(src.get("buttons"), dict) else {}
+    for n in BUTTON_NAMES:
+        v = btns.get(n)
+        if isinstance(v, dict):
+            if valid_target(v.get("tap")):
+                layout["buttons"][n]["tap"] = v.get("tap") or ""
+            hold = v.get("hold")
+            layout["buttons"][n]["hold"] = hold if (hold and valid_target(hold) and hold != "none") else None
+    if src.get("leftStick") in ("pad", "arrows", "wasd"):
+        layout["leftStick"] = src["leftStick"]
+    if src.get("rightStick") in ("pad", "mouse"):
+        layout["rightStick"] = src["rightStick"]
+    source = str(raw.get("source") or "standard")[:40]
+    return enabled, layout, source
+
+
+def kos_action(name):
+    """Runs a K.OS window action (K.OS Console KWin script) in the user's session."""
+    user = active_user()
+    if not user:
+        return
+    uname, uid, _ = user
+    bus = "unix:path=/run/user/%d/bus" % uid
+    cmd = ["runuser", "-u", uname, "--", "env", "DBUS_SESSION_BUS_ADDRESS=" + bus,
+           "XDG_RUNTIME_DIR=/run/user/%d" % uid,
+           "gdbus", "call", "--session", "--dest", "org.kde.kglobalaccel", "--object-path", "/component/kwin",
+           "--method", "org.kde.kglobalaccel.Component.invokeShortcut", "'%s'" % name]
+
+    def run():
+        for extra in ([], ["'default'"]):
+            try:
+                if subprocess.run(cmd + extra, capture_output=True, timeout=5).returncode == 0:
+                    return
+            except (OSError, subprocess.SubprocessError):
+                pass
+        log.info("K.OS action %s failed", name)
+    threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------- hiding the real controller
+
+def device_nodes(event_path):
+    """The real controller's device files: its event file, joystick file and raw HID files."""
+    nodes = [event_path]
+    name = os.path.basename(event_path)
+    try:
+        input_dir = os.path.realpath("/sys/class/input/%s/device" % name)
+    except OSError:
+        return nodes
+    try:
+        for entry in os.listdir(input_dir):
+            if entry.startswith("js") and os.path.exists("/dev/input/" + entry):
+                nodes.append("/dev/input/" + entry)
+    except OSError:
+        pass
+    d = input_dir
+    for _ in range(4):
+        d = os.path.dirname(d)
+        hid = os.path.join(d, "hidraw")
+        if os.path.isdir(hid):
+            for entry in os.listdir(hid):
+                if os.path.exists("/dev/" + entry):
+                    nodes.append("/dev/" + entry)
+            break
+    return nodes
+
+
+class Hider:
+    def __init__(self):
+        self.modes = {}
+
+    def hide(self, nodes):
+        for n in nodes:
+            try:
+                st = os.stat(n)
+                if n not in self.modes:
+                    self.modes[n] = st.st_mode & 0o7777
+                if st.st_mode & 0o777:
+                    os.chmod(n, 0)
+            except OSError:
+                pass
+
+    def unhide(self, nodes):
+        for n in nodes:
+            mode = self.modes.pop(n, None)
+            if mode is not None:
+                try:
+                    os.chmod(n, mode)
+                except OSError:
+                    pass
+
+    def unhide_all(self):
+        self.unhide(list(self.modes))
+
+
+# ---------------------------------------------------------------- one controller
+
+class Pad:
+    def __init__(self, dev, keys):
+        self.dev = dev
+        self.keys = keys
+        self.path = dev.path
+        info = dev.info
+        caps = dev.capabilities(absinfo=True)
+        self.absinfo = {code: ai for code, ai in caps.get(e.EV_ABS, [])}
+        key_caps = set(caps.get(e.EV_KEY, []))
+        xbox = info.vendor == 0x045E
+        self.code = {
+            "A": e.BTN_SOUTH, "B": e.BTN_EAST,
+            "X": e.BTN_NORTH if xbox else e.BTN_WEST, "Y": e.BTN_WEST if xbox else e.BTN_NORTH,
+            "LB": e.BTN_TL, "RB": e.BTN_TR, "VIEW": e.BTN_SELECT, "MENU": e.BTN_START,
+            "LS": e.BTN_THUMBL, "RS": e.BTN_THUMBR,
+        }
+        self.name_of = {c: n for n, c in self.code.items()}
+        for n, c in DPAD_BTN.items():
+            if c in key_caps:
+                self.name_of[c] = n
+        self.guide = {e.BTN_MODE, e.KEY_HOMEPAGE}
+        self.guide_down = False
+        self.guide_used = False
+        self.chord_esc = False
+        # Triggers and right stick differ between drivers
+        if e.ABS_GAS in self.absinfo and e.ABS_BRAKE in self.absinfo:
+            self.trig = {"LT": e.ABS_BRAKE, "RT": e.ABS_GAS}
+            self.rstick = (e.ABS_Z, e.ABS_RZ) if e.ABS_RX not in self.absinfo else (e.ABS_RX, e.ABS_RY)
+        else:
+            self.trig = {"LT": e.ABS_Z, "RT": e.ABS_RZ}
+            self.rstick = (e.ABS_RX, e.ABS_RY)
+        self.trig_name = {c: n for n, c in self.trig.items()}
+        self.trig_btn = {"LT": e.BTN_TL2, "RT": e.BTN_TR2}
+        for n, c in self.trig_btn.items():
+            if c in key_caps:
+                self.name_of[c] = n
+        self.lstick = (e.ABS_X, e.ABS_Y)
+
+        out_caps = {k: v for k, v in caps.items() if k not in (e.EV_SYN,)}
+        self.clone = UInput(out_caps, name=dev.name, vendor=info.vendor, product=info.product,
+                            version=info.version, bustype=info.bustype,
+                            phys="kos-input/" + (dev.phys or os.path.basename(dev.path)))
+        self.ff_map = {}
+        self.pressed = {}        # logical name -> pressed (real controller)
+        self.held = {}           # logical name -> active hold target
+        self.pending = {}        # logical name -> press time, waiting to see tap or hold
+        self.pulses = []         # (release time, target)
+        self.stick = {}          # axis code -> value 0..1 or -1..1 normalised
+        self.stick_keys = {}     # key code -> pressed by the left stick
+        self.carry = [0.0, 0.0]
+        self.hat = {e.ABS_HAT0X: 0, e.ABS_HAT0Y: 0}
+        self.out_hat = {e.ABS_HAT0X: 0, e.ABS_HAT0Y: 0}
+        self.layout = standard_layout()
+
+    # -- helpers
+    def norm(self, code, value):
+        ai = self.absinfo.get(code)
+        if not ai or ai.max == ai.min:
+            return 0.0
+        if code in self.trig.values():
+            return (value - ai.min) / float(ai.max - ai.min)
+        mid = (ai.max + ai.min) / 2.0
+        return max(-1.0, min(1.0, (value - mid) / ((ai.max - ai.min) / 2.0)))
+
+    def center(self, code):
+        ai = self.absinfo.get(code)
+        if not ai:
+            return 0
+        if code in self.trig.values():
+            return ai.min
+        return (ai.max + ai.min) // 2
+
+    # -- targets
+    def target_down(self, name, target, down):
+        """Sends a target press (down=True) or release."""
+        if target == "none":
+            return
+        if target in ("", None):
+            target = "self:" + name
+        kind, _, val = target.partition(":")
+        v = 1 if down else 0
+        if kind == "self" or kind == "pad":
+            n = val
+            if n in DPAD:
+                axis, sign = DPAD[n]
+                if down:
+                    self.out_hat[axis] = sign
+                elif self.out_hat[axis] == sign:
+                    self.out_hat[axis] = 0
+                if axis in self.absinfo:
+                    self.clone.write(e.EV_ABS, axis, self.out_hat[axis])
+                elif DPAD_BTN[n] in self.name_of:
+                    self.clone.write(e.EV_KEY, DPAD_BTN[n], v)
+            elif n in self.trig:
+                if n in self.trig_btn and self.trig_btn[n] in self.name_of:
+                    self.clone.write(e.EV_KEY, self.trig_btn[n], v)
+                if kind == "pad":  # a button pressing a trigger fully
+                    ai = self.absinfo.get(self.trig[n])
+                    if ai:
+                        self.clone.write(e.EV_ABS, self.trig[n], ai.max if down else ai.min)
+            elif n in self.code:
+                self.clone.write(e.EV_KEY, self.code[n], v)
+        elif kind == "key":
+            code = e.ecodes.get(val)
+            if code:
+                self.keys.press(code, v)
+        elif kind == "mouse":
+            self.keys.press(MOUSE[val], v)
+
+    def button(self, name, down, now):
+        if name == "GUIDE":
+            return
+        m = self.layout["buttons"].get(name) or {"tap": "", "hold": None}
+        if self.pressed.get(name) == down:
+            return
+        self.pressed[name] = down
+        if m.get("hold"):
+            if down:
+                self.pending[name] = now
+            else:
+                if name in self.held:
+                    self.target_down(name, self.held.pop(name), False)
+                elif self.pending.pop(name, None) is not None:
+                    self.target_down(name, m.get("tap", ""), True)
+                    self.pulses.append((now + PULSE, name, m.get("tap", "")))
+        else:
+            self.target_down(name, m.get("tap", ""), down)
+
+    def tick(self, now):
+        for name, since in list(self.pending.items()):
+            if now - since >= HOLD_TIME:
+                del self.pending[name]
+                target = (self.layout["buttons"].get(name) or {}).get("hold")
+                if target:
+                    self.held[name] = target
+                    self.target_down(name, target, True)
+        for p in [p for p in self.pulses if now >= p[0]]:
+            self.pulses.remove(p)
+            self.target_down(p[1], p[2], False)
+        if self.layout["rightStick"] == "mouse":
+            dx = self.stick.get(self.rstick[0], 0.0)
+            dy = self.stick.get(self.rstick[1], 0.0)
+            for i, v in enumerate((dx, dy)):
+                if abs(v) > DEADZONE:
+                    s = (abs(v) - DEADZONE) / (1 - DEADZONE)
+                    self.carry[i] += (1 if v > 0 else -1) * s * s * MOUSE_SPEED * TICK
+            mx, my = int(self.carry[0]), int(self.carry[1])
+            if mx or my:
+                self.carry[0] -= mx
+                self.carry[1] -= my
+                self.keys.move(mx, my)
+        self.clone.syn()
+
+    def busy(self):
+        return bool(self.pending or self.pulses or (self.layout["rightStick"] == "mouse" and any(
+            abs(self.stick.get(c, 0.0)) > DEADZONE for c in self.rstick)))
+
+    def stick_as_keys(self, mode):
+        x = self.stick.get(self.lstick[0], 0.0)
+        y = self.stick.get(self.lstick[1], 0.0)
+        if mode == "arrows":
+            dirs = {e.KEY_LEFT: -x, e.KEY_RIGHT: x, e.KEY_UP: -y, e.KEY_DOWN: y}
+        else:
+            dirs = {e.KEY_A: -x, e.KEY_D: x, e.KEY_W: -y, e.KEY_S: y}
+        for code, v in dirs.items():
+            on = self.stick_keys.get(code, False)
+            if not on and v > STICK_KEY_ON:
+                self.stick_keys[code] = True
+                self.keys.press(code, 1)
+            elif on and v < STICK_KEY_OFF:
+                self.stick_keys[code] = False
+                self.keys.press(code, 0)
+
+    def release_all(self):
+        """Lets go of everything K.OS is holding down (layout change, controller gone)."""
+        for name in list(self.held):
+            self.target_down(name, self.held.pop(name), False)
+        for p in self.pulses:
+            self.target_down(p[1], p[2], False)
+        self.pulses = []
+        self.pending = {}
+        for name, down in list(self.pressed.items()):
+            if down:
+                m = self.layout["buttons"].get(name) or {}
+                if not m.get("hold"):
+                    self.target_down(name, m.get("tap", ""), False)
+        self.pressed = {}
+        for code, on in self.stick_keys.items():
+            if on:
+                self.keys.press(code, 0)
+        self.stick_keys = {}
+        if self.chord_esc:
+            self.chord_esc = False
+            self.keys.press(e.KEY_ESC, 0)
+        try:
+            self.clone.syn()
+        except OSError:
+            pass
+
+    def set_layout(self, layout):
+        if layout != self.layout:
+            self.release_all()
+            self.layout = layout
+            # Sticks now handled differently: put them back in the middle for games
+            for code in self.lstick + self.rstick:
+                if code in self.absinfo:
+                    self.clone.write(e.EV_ABS, code, self.center(code))
+            self.clone.syn()
+
+    # -- events from the real controller
+    def handle(self, ev, now):
+        if ev.type == e.EV_KEY:
+            if ev.code in self.guide:
+                if ev.value == 1:
+                    self.guide_down = True
+                    self.guide_used = False
+                elif ev.value == 0:
+                    if self.guide_down and not self.guide_used:
+                        kos_action("KOS Toggle Home")
+                    self.guide_down = False
+                return
+            name = self.name_of.get(ev.code)
+            # Xbox button + View = Escape
+            if name == "VIEW" and (self.guide_down or self.chord_esc) and ev.value in (0, 1):
+                if ev.value == 1 and not self.chord_esc:
+                    self.chord_esc = True
+                    self.guide_used = True
+                    self.keys.press(e.KEY_ESC, 1)
+                elif ev.value == 0 and self.chord_esc:
+                    self.chord_esc = False
+                    self.keys.press(e.KEY_ESC, 0)
+                return
+            if name is None:
+                self.clone.write(e.EV_KEY, ev.code, ev.value)
+                return
+            if name in self.trig:
+                # Digital trigger buttons follow the analog trigger handling below
+                return
+            if ev.value in (0, 1):
+                self.button(name, ev.value == 1, now)
+        elif ev.type == e.EV_ABS:
+            code = ev.code
+            if code in (e.ABS_HAT0X, e.ABS_HAT0Y):
+                old = self.hat[code]
+                self.hat[code] = ev.value
+                neg, pos = ("LEFT", "RIGHT") if code == e.ABS_HAT0X else ("UP", "DOWN")
+                if old != ev.value:
+                    if old < 0:
+                        self.button(neg, False, now)
+                    if old > 0:
+                        self.button(pos, False, now)
+                    if ev.value < 0:
+                        self.button(neg, True, now)
+                    if ev.value > 0:
+                        self.button(pos, True, now)
+                return
+            if code in self.trig_name:
+                name = self.trig_name[code]
+                m = self.layout["buttons"].get(name) or {}
+                v = self.norm(code, ev.value)
+                if not m.get("tap") and not m.get("hold"):
+                    self.clone.write(e.EV_ABS, code, ev.value)  # normal analog trigger
+                    if name in self.trig_btn and self.trig_btn[name] in self.name_of:
+                        down = v > 0.5
+                        if self.pressed.get(name) != down:
+                            self.pressed[name] = down
+                            self.clone.write(e.EV_KEY, self.trig_btn[name], 1 if down else 0)
+                    return
+                if v > 0.55:
+                    self.button(name, True, now)
+                elif v < 0.4:
+                    self.button(name, False, now)
+                return
+            if code in self.lstick:
+                self.stick[code] = self.norm(code, ev.value)
+                if self.layout["leftStick"] == "pad":
+                    self.clone.write(e.EV_ABS, code, ev.value)
+                else:
+                    self.stick_as_keys(self.layout["leftStick"])
+                return
+            if code in self.rstick:
+                self.stick[code] = self.norm(code, ev.value)
+                if self.layout["rightStick"] == "pad":
+                    self.clone.write(e.EV_ABS, code, ev.value)
+                return
+            self.clone.write(e.EV_ABS, code, ev.value)
+        elif ev.type == e.EV_SYN:
+            self.clone.syn()
+        elif ev.type == e.EV_MSC:
+            self.clone.write(e.EV_MSC, ev.code, ev.value)
+
+    # -- rumble from games, passed on to the real controller
+    def handle_clone(self):
+        for ev in self.clone.read():
+            try:
+                if ev.type == e.EV_UINPUT and ev.code == e.UI_FF_UPLOAD:
+                    up = self.clone.begin_upload(ev.value)
+                    try:
+                        virt = up.effect.id
+                        eff = ff.Effect.from_buffer_copy(up.effect)
+                        eff.id = self.ff_map.get(virt, -1)
+                        self.ff_map[virt] = self.dev.upload_effect(eff)
+                        up.retval = 0
+                    except OSError as err:
+                        up.retval = -1
+                        log.info("rumble upload failed: %s", err)
+                    self.clone.end_upload(up)
+                elif ev.type == e.EV_UINPUT and ev.code == e.UI_FF_ERASE:
+                    er = self.clone.begin_erase(ev.value)
+                    try:
+                        phys = self.ff_map.pop(er.effect_id, None)
+                        if phys is not None:
+                            self.dev.erase_effect(phys)
+                        er.retval = 0
+                    except OSError:
+                        er.retval = 0
+                    self.clone.end_erase(er)
+                elif ev.type == e.EV_FF:
+                    if ev.code in (e.FF_GAIN, e.FF_AUTOCENTER):
+                        self.dev.write(e.EV_FF, ev.code, ev.value)
+                    elif ev.code in self.ff_map:
+                        self.dev.write(e.EV_FF, self.ff_map[ev.code], ev.value)
+            except OSError:
+                pass
+
+    def close(self):
+        self.release_all()
+        try:
+            self.dev.ungrab()
+        except OSError:
+            pass
+        for c in (self.clone, self.dev):
+            try:
+                c.close()
+            except OSError:
+                pass
+
+
+class Keys:
+    """One virtual keyboard and mouse shared by all controllers. Counts presses,
+    so two buttons sending the same key do not cancel each other."""
+
+    def __init__(self):
+        self.ui = UInput({e.EV_KEY: ALL_KEYS + list(MOUSE.values()),
+                          e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL]},
+                         name=KEYS_DEVICE_NAME)
+        self.count = {}
+
+    def press(self, code, value):
+        n = self.count.get(code, 0)
+        if value:
+            self.count[code] = n + 1
+            if n == 0:
+                self.ui.write(e.EV_KEY, code, 1)
+                self.ui.syn()
+        elif n > 0:
+            self.count[code] = n - 1
+            if n == 1:
+                self.ui.write(e.EV_KEY, code, 0)
+                self.ui.syn()
+
+    def move(self, dx, dy):
+        if dx:
+            self.ui.write(e.EV_REL, e.REL_X, dx)
+        if dy:
+            self.ui.write(e.EV_REL, e.REL_Y, dy)
+        self.ui.syn()
+
+    def close(self):
+        for code, n in list(self.count.items()):
+            if n:
+                self.ui.write(e.EV_KEY, code, 0)
+        try:
+            self.ui.syn()
+            self.ui.close()
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------- finding controllers
+
+def is_real_controller(dev):
+    try:
+        caps = dev.capabilities()
+    except OSError:
+        return False
+    keys = set(caps.get(e.EV_KEY, []))
+    absc = set(caps.get(e.EV_ABS, []))
+    if e.BTN_SOUTH not in keys or e.ABS_X not in absc or e.ABS_Y not in absc:
+        return False
+    if dev.info.vendor == STEAM_VENDOR:
+        return False
+    if (dev.phys or "").startswith("kos-input/"):
+        return False
+    try:
+        if "/virtual/" in os.path.realpath("/sys/class/input/%s/device" % os.path.basename(dev.path)):
+            return False
+    except OSError:
+        return False
+    return True
+
+
+class Layer:
+    def __init__(self):
+        self.pads = {}
+        self.ignored = set()
+        self.broken = set()
+        self.hider = Hider()
+        self.keys = None
+        self.enabled = True
+        self.layout = standard_layout()
+        self.source = "standard"
+        self.settings_stamp = None
+        self.running = True
+
+    def refresh_settings(self):
+        enabled, layout, source = read_settings()
+        if enabled != self.enabled:
+            log.info("K.OS controller layer %s", "on" if enabled else "off")
+            self.enabled = enabled
+            if not enabled:
+                self.drop_all()
+        self.source = source
+        if layout != self.layout:
+            log.info("layout: %s", source)
+            self.layout = layout
+            for p in self.pads.values():
+                p.set_layout(layout)
+
+    def scan(self):
+        if not self.enabled:
+            return
+        for path in evdev.list_devices():
+            if path in self.pads or path in self.ignored or path in self.broken:
+                continue
+            try:
+                dev = evdev.InputDevice(path)
+            except OSError:
+                continue
+            if not is_real_controller(dev):
+                self.ignored.add(path)
+                dev.close()
+                continue
+            try:
+                if self.keys is None:
+                    self.keys = Keys()
+                dev.grab()
+                pad = Pad(dev, self.keys)
+                pad.set_layout(self.layout)
+                pad.nodes = device_nodes(path)
+                self.hider.hide(pad.nodes)
+                self.pads[path] = pad
+                log.info("controller taken over: %s (%04x:%04x) %s, hidden: %s", dev.name, dev.info.vendor,
+                         dev.info.product, path, " ".join(pad.nodes))
+            except Exception as err:  # noqa: BLE001 (leave this controller alone)
+                log.warning("cannot take over %s: %s", path, err)
+                self.broken.add(path)
+                try:
+                    dev.ungrab()
+                except OSError:
+                    pass
+                dev.close()
+        # Re-lock files that udev or the login manager unlocked again
+        for pad in self.pads.values():
+            self.hider.hide(pad.nodes)
+
+    def drop(self, path, reason):
+        pad = self.pads.pop(path, None)
+        if pad:
+            log.info("controller released (%s): %s", reason, path)
+            pad.close()
+            self.hider.unhide(pad.nodes)
+
+    def drop_all(self):
+        for path in list(self.pads):
+            self.drop(path, "layer off")
+        self.hider.unhide_all()
+
+    def write_status(self):
+        try:
+            os.makedirs(RUN_DIR, exist_ok=True)
+            os.chmod(RUN_DIR, 0o755)
+            st = {"running": True, "enabled": self.enabled, "source": self.source, "time": time.time(),
+                  "pads": [{"name": p.dev.name, "vendor": "%04x" % p.dev.info.vendor,
+                            "product": "%04x" % p.dev.info.product} for p in self.pads.values()]}
+            tmp = STATUS + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(st, f)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, STATUS)
+        except OSError:
+            pass
+
+    def run(self):
+        last_scan = 0.0
+        while self.running:
+            now = time.monotonic()
+            if now - last_scan >= SCAN_EVERY:
+                self.refresh_settings()
+                self.scan()
+                self.write_status()
+                last_scan = now
+            fds = {}
+            for path, p in self.pads.items():
+                fds[p.dev.fd] = (path, "real")
+                fds[p.clone.fd] = (path, "clone")
+            timeout = TICK if any(p.busy() for p in self.pads.values()) else 0.5
+            try:
+                ready = select.select(list(fds), [], [], timeout)[0] if fds else (time.sleep(timeout) or [])
+            except (OSError, ValueError):
+                ready = []
+            now = time.monotonic()
+            for fd in ready:
+                path, kind = fds[fd]
+                pad = self.pads.get(path)
+                if not pad:
+                    continue
+                try:
+                    if kind == "real":
+                        for ev in pad.dev.read():
+                            pad.handle(ev, now)
+                    else:
+                        pad.handle_clone()
+                except OSError:
+                    self.drop(path, "controller gone")
+                except Exception as err:  # noqa: BLE001 (a bug must never leave a controller dead)
+                    log.exception("error with %s: %s", path, err)
+                    self.drop(path, "error")
+                    self.broken.add(path)
+            for path, pad in list(self.pads.items()):
+                try:
+                    pad.tick(now)
+                except OSError:
+                    self.drop(path, "controller gone")
+
+    def shutdown(self):
+        self.drop_all()
+        if self.keys:
+            self.keys.close()
+        try:
+            os.remove(STATUS)
+        except OSError:
+            pass
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    layer = Layer()
+
+    def stop(*_):
+        layer.running = False
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    log.info("K.OS controller layer started")
+    try:
+        layer.run()
+    finally:
+        layer.shutdown()
+        log.info("K.OS controller layer stopped, controllers given back")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

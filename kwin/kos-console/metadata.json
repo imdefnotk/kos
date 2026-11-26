@@ -12,7 +12,7 @@
         "Id": "kos-console",
         "License": "MIT",
         "Name": "K.OS Console",
-        "Version": "2.0"
+        "Version": "2.1"
     },
     "X-Plasma-API": "javascript",
     "X-Plasma-MainScript": "code/main.js"
