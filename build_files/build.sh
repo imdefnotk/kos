@@ -114,8 +114,11 @@ fi
 #    original boot files (Bazzite's boot screen) instead of failing.
 chmod 0755 /usr/share/plymouth/themes/kos
 chmod 0644 /usr/share/plymouth/themes/kos/*
-if command -v plymouth-set-default-theme >/dev/null 2>&1 && command -v dracut >/dev/null 2>&1; then
-    plymouth-set-default-theme kos
+#    Our theme is a Plymouth "script" theme, which needs the script plugin
+#    (package plymouth-plugin-script, not in Bazzite by default).
+dnf5 -y install plymouth-plugin-script || echo "WARNING: could not install plymouth-plugin-script" >&2
+if [ -e /usr/lib64/plymouth/script.so ] && command -v plymouth-set-default-theme >/dev/null 2>&1 \
+        && command -v dracut >/dev/null 2>&1 && plymouth-set-default-theme kos; then
     KVER="$(ls /usr/lib/modules | sort -V | tail -n 1)"
     if TMPDIR=/tmp dracut --no-hostonly --kver "${KVER}" --reproducible --add ostree \
             -f "/tmp/initramfs-kos.img"; then
@@ -126,6 +129,6 @@ if command -v plymouth-set-default-theme >/dev/null 2>&1 && command -v dracut >/
         echo "WARNING: could not rebuild the boot files, keeping the old boot screen" >&2
     fi
 else
-    echo "WARNING: plymouth or dracut missing, keeping the old boot screen" >&2
+    echo "WARNING: plymouth script plugin, plymouth or dracut missing, keeping the old boot screen" >&2
 fi
 
