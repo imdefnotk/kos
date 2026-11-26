@@ -31,14 +31,14 @@
         <button type="button" class="tab f" data-group="tabs" data-tab="games">Oyunlar</button>
         <button type="button" class="tab f" data-group="tabs" data-tab="apps">Uygulamalar</button>
         <button type="button" class="tab f" data-group="tabs" data-tab="store">Mağaza</button>
-        <button type="button" class="tab f" data-group="tabs" data-tab="settings">Ayarlar</button>
       </nav>
     </div>
     <div class="status">
       <span id="netStatus" class="status-icon" role="img" aria-label="İnternet"></span>
       <span id="padStatus" class="status-icon" role="img" aria-label="Kumanda"></span>
       <span id="clock" class="clock">00:00</span>
-      <div class="avatar" role="img" aria-label="Profil: Kerem">K</div>
+      <!-- Profile button: opens Ayarlar (settings live under the profile, PS5 style) -->
+      <button type="button" class="avatar f" data-group="tabs" data-tab="settings" aria-label="Profil ve Ayarlar">K<span class="avatar-gear" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg></span></button>
     </div>
   </header>
 

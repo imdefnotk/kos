@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>K.OS Hızlı Menü</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/menu.css">
+</head>
+<body>
+<!-- K.OS Quick Menu: opens over the game or app in front with the Xbox button (tap).
+     Shown by the K.OS Home shell in its own see-through window (shell/main.js). -->
+<div class="stage" id="stage">
+  <div class="shade"></div>
+  <div class="clock" id="clock"></div>
+  <div class="area">
+    <div class="area-head">
+      <span class="area-kicker" id="kicker"></span>
+      <h1 class="area-title" id="title"></h1>
+    </div>
+    <div class="cards-wrap"><div class="cards" id="cards"></div></div>
+  </div>
+  <nav class="bar" id="bar" aria-label="Hızlı menü"></nav>
+  <div class="hints" id="hints"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+<script src="js/menu.js"></script>
+</body>
+</html>

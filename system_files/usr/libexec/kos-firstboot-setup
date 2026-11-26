@@ -82,6 +82,13 @@ EOF
     fi
 fi
 
+# Steam asks to "control input devices" (KDE's remote control dialog, "Uzaktan
+# Kumanda") for its controller support. A console must never show that, so Steam
+# is allowed once for good (KDE portal pre-authorization, Plasma 6.3 and newer).
+if command -v flatpak >/dev/null 2>&1; then
+    flatpak permission-set kde-authorized remote-desktop steam yes >/dev/null 2>&1 || true
+fi
+
 # K.OS startup video for Steam (see /usr/libexec/kos-startup-movie)
 /usr/libexec/kos-startup-movie || true
 

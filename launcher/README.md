@@ -90,3 +90,8 @@ See `demo-art/README.txt`. Logos you put there show on the tiles but are never u
 | `K.OS Launcher.cmd` | Windows starter: helper + full-screen mode |
 | `/usr/bin/kos-home` (in the K.OS image) | K.OS starter: helper + K.OS Home shell (Electron, full screen, no browser parts) |
 | `demo-art/` | Private logo folder (ignored by Git) |
+
+## Quick Menu (K.OS)
+
+Tap the Xbox button in any game or app and the K.OS Quick Menu opens on top of it, in its own see-through window (`menu.html`, `css/menu.css`, `js/menu.js`, shown by the K.OS Home shell). Hold the Xbox button to go to K.OS Home. While the menu is open the controller only moves the menu; the game gets nothing. To try the menu's look in a normal browser, open `http://127.0.0.1:47800/menu.html` while the helper runs (arrow keys, Enter, Escape).
+

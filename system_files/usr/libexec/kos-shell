@@ -11,6 +11,10 @@ set -uo pipefail
 
 MARK="${HOME}/.config/kos-desktop-mode"
 export KOS_SESSION=1
+LOG="${XDG_STATE_HOME:-${HOME}/.local/state}/kos/session.log"
+mkdir -p "$(dirname "${LOG}")"
+step() { echo "$(date '+%Y-%m-%d %H:%M:%S') kos-shell: $*" >> "${LOG}"; }
+step "started (WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-} DISPLAY=${DISPLAY:-})"
 
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd \
@@ -18,19 +22,20 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
         XDG_SESSION_DESKTOP KDE_SESSION_VERSION KOS_SESSION LANG LANGUAGE >/dev/null 2>&1 || true
 fi
 
-/usr/libexec/kos-firstboot-setup || true
-/usr/libexec/kos-single-display >/dev/null 2>&1 || true
+step "setup"
+timeout 60 /usr/libexec/kos-firstboot-setup >> "${LOG}" 2>&1 || step "setup did not finish"
+timeout 20 /usr/libexec/kos-single-display >/dev/null 2>&1 || true
 
 if ! pgrep -x steam >/dev/null 2>&1; then
-    /usr/libexec/kos-steam-shortcuts || true
+    step "starting Steam"
+    timeout 30 /usr/libexec/kos-steam-shortcuts >/dev/null 2>&1 || true
     nohup /usr/bin/steam -silent >/dev/null 2>&1 &
 fi
+step "opening K.OS Home"
 
 # Safety net: if K.OS Home keeps closing right away, use the older Chrome
 # version of K.OS Home after 3 tries, and open the Plasma desktop after 10,
 # so the screen never stays black. Log: ~/.local/state/kos/session.log
-LOG="${XDG_STATE_HOME:-${HOME}/.local/state}/kos/session.log"
-mkdir -p "$(dirname "${LOG}")"
 quick_fails=0
 intro="--intro"
 while [ ! -f "${MARK}" ]; do
@@ -59,5 +64,8 @@ done
 if pgrep -x steam >/dev/null 2>&1; then
     timeout 20 /usr/bin/steam -shutdown >/dev/null 2>&1 || true
 fi
+
+# Our screen is going away: background services must forget it
+systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XAUTHORITY KOS_SESSION >/dev/null 2>&1 || true
 
 exit 0

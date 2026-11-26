@@ -33,7 +33,7 @@
     focused: null,
     overlay: null,
     beforeOverlay: null,
-    settingsCat: 'ekran',
+    settingsCat: 'baglanti',
     storeFilter: 'hepsi',
     installed: saved.get('installed', {}),
     installing: {},
@@ -567,7 +567,7 @@
     }
     var items = D.settingsPlans[cat.id] || [];
     var extra = '';
-    if (cat.id === 'windows') {
+    if (cat.id === 'guc') {
       extra = '<button type="button" class="btn primary f" style="align-self:flex-start" data-group="set-pane" data-action="power:windows"><span class="dot"></span>Windows\'a Geç</button>';
     }
     if (cat.id === 'sistem' && live.platform === 'linux') {
@@ -608,7 +608,7 @@
     if (g.deck === 1) { lines.push('Steam Deck\'te desteklenmiyor: K.OS\'ta sorun çıkarabilir. Sorun olursa Windows\'ta oynayın.'); }
     if (g.controller === 'full') { lines.push('Kumandayla tam uyumlu.'); }
     if (g.controller === 'partial') { lines.push('Kısmi kumanda desteği: bazı menüler klavye isteyebilir. Xbox tuşu + View = Esc.'); }
-    if (g.controller === 'none') { lines.push('Klavye ve fare için yapılmış bir oyun. K.OS, kumandayı klavye gibi kullanır (Ayarlar > Kumanda Tuşları).'); }
+    if (g.controller === 'none') { lines.push('Klavye ve fare için yapılmış bir oyun. K.OS, kumandayı klavye gibi kullanır (Ayarlar > Kumandalar).'); }
     return lines.map(function (t) { return '<span>' + esc(t) + '</span>'; }).join('');
   }
 
@@ -685,7 +685,7 @@
     if (o && p.done) { p.done(o.value); }
   }
 
-  /* ---------- Controller buttons (Ayarlar > Kumanda Tuşları) ---------- */
+  /* ---------- Controller buttons (Ayarlar > Kumandalar) ---------- */
 
   var BTN_LABEL = {
     A: 'A', B: 'B', X: 'X', Y: 'Y', LB: 'LB', RB: 'RB', LT: 'LT', RT: 'RT', VIEW: 'View', MENU: 'Menü',
@@ -789,12 +789,12 @@
 
   function renderControllerPane(pane) {
     if (!live.on || live.platform !== 'linux') {
-      pane.innerHTML = '<h1>Kumanda Tuşları</h1><div class="panel plan"><span class="plan-kicker">K.OS\'TA</span><p>Kumanda tuşları K.OS\'ta ayarlanır. Bu bilgisayarda K.OS Home yardımcısı çalışmıyor veya bu Windows.</p></div>';
+      pane.innerHTML = '<h1>Kumandalar</h1><div class="panel plan"><span class="plan-kicker">K.OS\'TA</span><p>Kumanda tuşları K.OS\'ta ayarlanır. Bu bilgisayarda K.OS Home yardımcısı çalışmıyor veya bu Windows.</p></div>';
       if (live.on && !state.ctl) { loadController(function () { if (state.settingsCat === 'kumanda') { renderSettingsPane(); } }); }
       if (!state.ctl) { return; }
     }
     if (!state.ctl) {
-      pane.innerHTML = '<h1>Kumanda Tuşları</h1><div class="panel plan"><p>Yükleniyor...</p></div>';
+      pane.innerHTML = '<h1>Kumandalar</h1><div class="panel plan"><p>Yükleniyor...</p></div>';
       loadController(function () { if (state.settingsCat === 'kumanda' && state.ctl) { renderSettingsPane(); } });
       return;
     }
@@ -808,11 +808,12 @@
     var edits = [['standard', 'Standart'], ['keyboard', 'Klavye oyunları']];
     if (ed.indexOf('game:') === 0) { edits.push([ed, g ? g.name : 'Oyun']); }
 
-    var html = '<h1>Kumanda Tuşları</h1>' +
+    var html = '<h1>Kumandalar</h1>' +
       '<div class="panel row"><div class="row-text"><b>K.OS kumanda katmanı</b><span>' + esc(statusText) + '</span></div>' +
       '<button type="button" role="switch" class="switch f" data-group="set-pane" data-action="ctlenable:" aria-checked="' + (c.enabled ? 'true' : 'false') + '" aria-label="K.OS kumanda katmanı"><span></span></button></div>' +
       '<div class="panel plan"><span class="plan-kicker">HER ZAMAN</span><ul>' +
-      '<li>Xbox tuşu: K.OS Home açılır, oyun arkada devam eder. Tekrar basınca oyuna dönersin.</li>' +
+      '<li>Xbox tuşuna bas: Hızlı Menü açılır, oyun arkada devam eder. Tekrar bas: oyuna dönersin.</li>' +
+      '<li>Xbox tuşunu basılı tut: K.OS Home.</li>' +
       '<li>Xbox tuşu basılıyken View: Esc (Undertale gibi oyunlardan çıkmak için).</li></ul></div>' +
       '<div class="panel row"><div class="row-text"><b>Düzenlenen düzen</b><span>Standart: kumandalı oyunlar. Klavye oyunları: kumanda desteği olmayan oyunlar.</span></div><div class="seg">' +
       edits.map(function (e) {
@@ -936,13 +937,15 @@
 
   /* ---------- Screens and tabs ---------- */
 
-  var TABS = ['home', 'games', 'apps', 'store', 'settings'];
+  // LB / RB move between these; Ayarlar is under the profile button (top right)
+  var TABS = ['home', 'games', 'apps', 'store'];
 
   function showScreen(name) {
     if (state.screen === name && $('#screen-' + name).classList.contains('active')) { return; }
     state.screen = name;
     stage.dataset.screen = name;
     $$('.screen').forEach(function (s) { s.classList.toggle('active', s.id === 'screen-' + name); });
+    $('.avatar').classList.toggle('active', name === 'settings');
     $$('.tab').forEach(function (t) {
       var on = t.dataset.tab === name;
       t.classList.toggle('active', on);
@@ -1045,6 +1048,15 @@
     var acy = (a.top + a.bottom) / 2;
     var best = null;
     var bestScore = Infinity;
+    var bestInLine = false;
+    function inDirection(b) {
+      var bcx = (b.left + b.right) / 2;
+      var bcy = (b.top + b.bottom) / 2;
+      if (dir === 'right') { return bcx > acx + 2 && b.right > a.right; }
+      if (dir === 'left') { return bcx < acx - 2 && b.left < a.left; }
+      if (dir === 'down') { return bcy > acy + 2 && b.bottom > a.bottom; }
+      return bcy < acy - 2 && b.top < a.top;
+    }
     els.forEach(function (el) {
       if (el === cur || !visible(el)) { return; }
       var b = el.getBoundingClientRect();
@@ -1069,12 +1081,18 @@
         secondary = overlap(a.left, a.right, b.left, b.right);
       }
       var score = primary + secondary * 4 + Math.abs(dir === 'up' || dir === 'down' ? bcx - acx : bcy - acy) * 0.05;
-      if (score < bestScore) { bestScore = score; best = el; }
+      // Down means down: something straight below (or above, or beside) always
+      // wins over something off to the side, however close that one is
+      var inLine = secondary === 0;
+      if ((inLine && !bestInLine) || (inLine === bestInLine && score < bestScore)) {
+        bestScore = score; best = el; bestInLine = inLine;
+      }
     });
     if (!best) { return; }
     var g = best.dataset.group;
-    if (g && g !== cur.dataset.group && state.memory[g] && visible(state.memory[g]) && els.indexOf(state.memory[g]) !== -1) {
-      best = state.memory[g];
+    var mem = g ? state.memory[g] : null;
+    if (mem && g !== cur.dataset.group && visible(mem) && els.indexOf(mem) !== -1 && inDirection(mem.getBoundingClientRect())) {
+      best = mem;
     }
     setFocus(best);
     sfx('move');
@@ -1212,6 +1230,21 @@
 
   function powerAction(kind) {
     if (kind === 'windows' && live.platform === 'linux') { openApp(app('windows')); return; }
+    if (live.platform === 'linux') {
+      var el = state.focused;
+      var names = { sleep: 'Uyku moduna geçiliyor...', restart: 'Yeniden başlatılıyor...', off: 'Kapatılıyor...' };
+      // Press twice: the first press only asks
+      if (!el || el.dataset.confirm !== kind) {
+        if (el) { el.dataset.confirm = kind; }
+        toast(kind === 'sleep' ? 'Uyku modu için tekrar basın.' : (kind === 'restart' ? 'Yeniden başlatmak için tekrar basın.' : 'Kapatmak için tekrar basın.'));
+        setTimeout(function () { if (el) { delete el.dataset.confirm; } }, 4000);
+        return;
+      }
+      delete el.dataset.confirm;
+      toast(names[kind] || '');
+      api('/api/power/' + kind, { method: 'POST' }).catch(function () { toast('Olmadı. Tekrar deneyin.'); });
+      return;
+    }
     var msg = {
       sleep: 'Demo: K.OS\'ta bu düğme konsolu uyku moduna alır.',
       restart: 'Demo: K.OS\'ta bu düğme konsolu yeniden başlatır.',
@@ -1512,9 +1545,9 @@
     state.leftForGame = false;
     syncDuck();
     refreshLibrary();
-    // Back on K.OS Home while a game is still running (Xbox button): show the game
-    // menu. Wait a moment first: a game that just closed takes a second to end.
-    setTimeout(function () { if (document.hasFocus()) { checkRunning(true); } }, 1500);
+    // Back on K.OS Home (Xbox button held): the running game shows "Oyuna dön".
+    // The Quick Menu (Xbox button tap) is its own window.
+    setTimeout(function () { checkRunning(false); }, 1500);
   });
   document.addEventListener('visibilitychange', syncDuck);
 

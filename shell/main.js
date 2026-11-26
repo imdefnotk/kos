@@ -11,11 +11,25 @@
 //   --kos-intro           play the K.OS startup video first (first start after power on)
 // Developer: start with the environment variable KOS_DEV=1 to allow F12
 // (developer tools), F5 (reload) and Ctrl+Q (quit).
+//
+// Quick Menu (PS5 style): a second, see-through window that sits on top of the
+// game or app in front. The game keeps running behind it. The controller layer
+// (/usr/libexec/kos-input) talks to this program over a small socket in
+// $XDG_RUNTIME_DIR/kos-home.sock, one command per line:
+//   from kos-input:  menu  (Xbox button tap: open or close the Quick Menu)
+//                    home  (Xbox button hold: K.OS Home)
+//                    close (close the Quick Menu)
+//   to kos-input:    menu-open / menu-closed (while open, the controller drives
+//                    only the menu, the game gets nothing)
+//                    key <KEY_A+KEY_B> (press keys in the app in front, for
+//                    example Shift+Tab for the Steam overlay)
 'use strict';
 
 const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const path = require('path');
 
 function argValue(name, fallback) {
@@ -36,7 +50,15 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.setName('K.OS Home');
 app.setPath('userData', path.join(app.getPath('appData'), 'kos-home'));
 
+const MENU_TITLE = 'K.OS Hızlı Menü';
+const SOCKET = path.join(process.env.XDG_RUNTIME_DIR || '/tmp', 'kos-home.sock');
+
 let win = null;
+let menuWin = null;
+let menuOpen = false;
+let menuShownAt = 0;
+let menuReady = false;
+const linkClients = new Set();
 let quitting = false;
 let introDone = !WANT_INTRO;
 let helperUp = false;
@@ -45,6 +67,7 @@ let showingWaiting = false;
 
 function quitNow() {
   quitting = true;
+  try { fs.unlinkSync(SOCKET); } catch (e) { /* already gone */ }
   app.exit(0);
 }
 
@@ -242,5 +265,153 @@ ipcMain.on('kos-intro-done', (e) => {
   }
 });
 
-app.whenReady().then(createWindow);
+/* ---------- Quick Menu ---------- */
+
+function kwinAction(name) {
+  // K.OS window actions from the K.OS Console KWin script
+  const args = ['call', '--session', '--dest', 'org.kde.kglobalaccel', '--object-path', '/component/kwin',
+    '--method', 'org.kde.kglobalaccel.Component.invokeShortcut', "'" + name + "'"];
+  execFile('gdbus', args, { timeout: 5000 }, (err) => {
+    if (err) { execFile('gdbus', args.concat(["'default'"]), { timeout: 5000 }, () => {}); }
+  });
+}
+
+function tellInput(line) {
+  for (const c of linkClients) {
+    try { c.write(line + '\n'); } catch (e) { /* client gone */ }
+  }
+}
+
+function createMenuWindow() {
+  menuWin = new BrowserWindow({
+    title: MENU_TITLE,
+    show: false,
+    fullscreen: true,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      backgroundThrottling: false,
+    },
+  });
+  menuWin.on('page-title-updated', (e) => e.preventDefault());
+  menuWin.on('close', (e) => {
+    if (!quitting) {
+      e.preventDefault();
+      hideMenu();
+    }
+  });
+  // Clicking or Alt+Tab to another window closes the menu
+  menuWin.on('blur', () => {
+    if (menuOpen && Date.now() - menuShownAt > 400) { hideMenu(); }
+  });
+  const wc = menuWin.webContents;
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  wc.on('will-navigate', (e, url) => { if (!url.startsWith(HOME_URL)) { e.preventDefault(); } });
+  wc.on('context-menu', (e) => e.preventDefault());
+  wc.on('before-input-event', (e, input) => { if (isBlockedKey(input)) { e.preventDefault(); } });
+  wc.on('did-finish-load', () => { menuReady = true; });
+  wc.on('did-fail-load', (e, code, desc, url, isMainFrame) => {
+    if (isMainFrame && code !== -3) {
+      menuReady = false;
+      setTimeout(() => { if (menuWin) { menuWin.loadURL(HOME_URL + 'menu.html'); } }, 3000);
+    }
+  });
+  wc.on('render-process-gone', () => {
+    menuReady = false;
+    setTimeout(() => { if (menuWin) { menuWin.loadURL(HOME_URL + 'menu.html'); } }, 1000);
+  });
+  menuWin.loadURL(HOME_URL + 'menu.html');
+}
+
+function showMenu() {
+  if (!homeLoaded) { return; }
+  if (!menuWin) { createMenuWindow(); }
+  if (!menuReady) {
+    menuWin.webContents.once('did-finish-load', () => showMenu());
+    return;
+  }
+  menuOpen = true;
+  menuShownAt = Date.now();
+  menuWin.webContents.send('kos-menu-show');
+  menuWin.show();
+  menuWin.focus();
+  tellInput('menu-open');
+}
+
+function hideMenu() {
+  if (!menuOpen) { return; }
+  menuOpen = false;
+  if (menuWin) {
+    menuWin.webContents.send('kos-menu-hide');
+    menuWin.hide();
+  }
+  tellInput('menu-closed');
+}
+
+function goHome() {
+  hideMenu();
+  // Give the window manager a moment to put the game back first
+  setTimeout(() => kwinAction('KOS Show Home'), 150);
+}
+
+function pressKeys(combo) {
+  hideMenu();
+  if (/^KEY_[A-Z0-9_]+(\+KEY_[A-Z0-9_]+){0,3}$/.test(combo)) {
+    setTimeout(() => tellInput('key ' + combo), 350);
+  }
+}
+
+function handleLink(line) {
+  const cmd = line.trim();
+  if (cmd === 'menu') { if (menuOpen) { hideMenu(); } else { showMenu(); } }
+  else if (cmd === 'home') { goHome(); }
+  else if (cmd === 'close') { hideMenu(); }
+}
+
+function startLink() {
+  try { fs.unlinkSync(SOCKET); } catch (e) { /* no old socket */ }
+  const server = net.createServer((c) => {
+    linkClients.add(c);
+    c.setEncoding('utf8');
+    c.write((menuOpen ? 'menu-open' : 'menu-closed') + '\n');
+    let buf = '';
+    c.on('data', (d) => {
+      buf += d;
+      if (buf.length > 4096) { buf = ''; }
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        handleLink(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+      }
+    });
+    c.on('close', () => linkClients.delete(c));
+    c.on('error', () => linkClients.delete(c));
+  });
+  server.on('error', (err) => console.error('K.OS link:', err.message));
+  server.listen(SOCKET, () => { try { fs.chmodSync(SOCKET, 0o600); } catch (e) { /* fine */ } });
+}
+
+ipcMain.on('kos-menu', (e, action, arg) => {
+  if (!menuWin || e.sender !== menuWin.webContents) { return; }
+  if (action === 'close' || action === 'resume') { hideMenu(); }
+  else if (action === 'home') { goHome(); }
+  else if (action === 'keys') { pressKeys(String(arg || '')); }
+});
+
+app.whenReady().then(() => {
+  createWindow();
+  startLink();
+  // Load the Quick Menu in the background, so the Xbox button opens it at once
+  setTimeout(() => { if (!menuWin && homeLoaded) { createMenuWindow(); } }, 4000);
+  setInterval(() => { if (!menuWin && homeLoaded) { createMenuWindow(); } }, 10000);
+});
 app.on('window-all-closed', () => app.quit());

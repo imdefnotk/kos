@@ -17,7 +17,10 @@
 //     kos-input through KDE's shortcut service, no keys needed):
 //       KOS Show Home    K.OS Home to the front (a game keeps running behind it)
 //       KOS Resume Game  the game or app behind K.OS Home back to the front
-//       KOS Toggle Home  Xbox button: K.OS Home, or back to the game if K.OS Home is in front
+//       KOS Toggle Home  K.OS Home, or back to the game if K.OS Home is in front
+//                        (used by kos-input only when the K.OS Home shell is not running)
+//  6. The Quick Menu ("K.OS Hızlı Menü", Xbox button tap) stays on top of
+//     everything; when it closes, the game or app it covered is in front again.
 //
 // Left alone: the Steam client, KDE tools and dialogs, Konsole, pop-ups,
 // tiny windows (launchers, splash screens).
@@ -35,8 +38,15 @@ function cls(w) {
     return String(w.resourceClass || "").toLowerCase();
 }
 
+var MENU_TITLE = "K.OS Hızlı Menü";
+
+// The Quick Menu (Xbox button): a see-through window on top of the game
+function isMenu(w) {
+    return !!w && String(w.caption || "") === MENU_TITLE;
+}
+
 function isHome(w) {
-    return !!w && !w.deleted && String(w.caption || "").indexOf("K.OS") === 0;
+    return !!w && !w.deleted && !isMenu(w) && String(w.caption || "").indexOf("K.OS") === 0;
 }
 
 function isBrowser(w) {
@@ -51,7 +61,7 @@ function isBrowser(w) {
 
 // True for windows K.OS should manage: real game and app windows
 function isApp(w) {
-    if (!w || w.deleted || isHome(w)) {
+    if (!w || w.deleted || isHome(w) || isMenu(w)) {
         return false;
     }
     if (!w.normalWindow || w.dialog || w.transient || w.specialWindow || w.popupWindow) {
@@ -92,6 +102,10 @@ function setupHome(w) {
     w.fullScreen = true;
     if (w.minimized) {
         w.minimized = false;
+    }
+    // K.OS Home opening (at power on) comes to the front, unless a game is open
+    if (!topApp(null)) {
+        workspace.activeWindow = w;
     }
     w.minimizedChanged.connect(function () {
         if (w.minimized) {
@@ -187,8 +201,47 @@ function toggleHome() {
     showHome();
 }
 
+// Quick Menu: always on top of everything, on K.OS Home's screen, in front.
+// When it goes away, the game or app that was in front gets the focus back.
+var menuPrev = null;
+
+function setupMenu(w) {
+    var prev = workspace.activeWindow;
+    if (prev && prev !== w && !isMenu(prev)) {
+        menuPrev = prev;
+    }
+    w.keepAbove = true;
+    w.skipSwitcher = true;
+    w.skipTaskbar = true;
+    w.skipPager = true;
+    w.noBorder = true;
+    var home = homeWindow();
+    if (home && w.output !== home.output) {
+        workspace.sendClientToScreen(w, home.output);
+    }
+    w.fullScreen = true;
+    workspace.activeWindow = w;
+}
+
+function leaveMenu() {
+    var back = menuPrev;
+    menuPrev = null;
+    if (back && !back.deleted && !back.minimized) {
+        workspace.activeWindow = back;
+    }
+}
+
 function onWindowAdded(w) {
     if (!w) {
+        return;
+    }
+    if (isMenu(w)) {
+        setupMenu(w);
+        w.minimizedChanged.connect(function () {
+            if (w.minimized) {
+                leaveMenu();
+            }
+        });
         return;
     }
     if (isHome(w)) {
@@ -209,7 +262,9 @@ function onWindowAdded(w) {
     }
     // Some programs set their real title a moment after the window appears
     w.captionChanged.connect(function () {
-        if (isHome(w)) {
+        if (isMenu(w)) {
+            setupMenu(w);
+        } else if (isHome(w)) {
             setupHome(w);
         }
     });
@@ -219,6 +274,13 @@ function onWindowAdded(w) {
 }
 
 function onWindowRemoved(w) {
+    if (isMenu(w)) {
+        leaveMenu();
+        return;
+    }
+    if (w === menuPrev) {
+        menuPrev = null;
+    }
     var k = readyHomes.indexOf(w);
     if (k !== -1) {
         readyHomes.splice(k, 1);

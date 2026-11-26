@@ -266,6 +266,7 @@ class Steam:
             cfg = read_vdf(os.path.join(user_dir, "config", "localconfig.vdf"))
             apps_cfg = iget(cfg, "UserLocalConfigStore", "Software", "Valve", "Steam", "apps") or {}
         games = {}
+        downloads = []
         for lib in library_folders(root):
             sa = os.path.join(lib, "steamapps")
             try:
@@ -281,6 +282,11 @@ class Steam:
                 flags = to_int(iget(st, "StateFlags"))
                 if appid <= 0 or not name or appid in TOOL_APPIDS or TOOL_NAME.match(name):
                     continue
+                want = to_int(iget(st, "BytesToDownload"))
+                have = to_int(iget(st, "BytesDownloaded"))
+                if want > 0 and have < want:
+                    downloads.append({"appid": appid, "name": name, "percent": int(have * 100 / want),
+                                      "bytes": want})
                 if not flags & 4:  # 4 = fully installed
                     continue
                 info = iget(apps_cfg, str(appid)) or {}
@@ -298,7 +304,8 @@ class Steam:
             g["controller"] = t.get("controller")
             g["deck"] = t.get("deck")
         ordered = sorted(games.values(), key=lambda g: (-g["lastPlayed"], g["name"].lower()))
-        return {"steamFound": True, "root": root, "userDir": user_dir, "user": persona, "games": ordered}
+        return {"steamFound": True, "root": root, "userDir": user_dir, "user": persona, "games": ordered,
+                "downloads": downloads}
 
     def art_file(self, appid, kind):
         """Path of a picture on the drive, or None."""
@@ -918,6 +925,184 @@ class GameWatcher:
             time.sleep(1.0)
 
 
+
+# ---------------------------------------------------------------- Quick Menu (K.OS only)
+# Sound, microphone, internet, controller batteries, downloads, K.OS updates,
+# screenshots and power, for the Quick Menu (Xbox button) and K.OS Home.
+
+def _run(cmd, timeout=3):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+
+
+def _volume(target):
+    code, out = _run(["wpctl", "get-volume", target])
+    m = re.search(r"Volume:\s*([0-9.]+)", out or "")
+    if code != 0 or not m:
+        return None
+    return {"volume": round(float(m.group(1)), 2), "muted": "[MUTED]" in out}
+
+
+def sound_outputs():
+    """Speakers, TV and headphones PipeWire knows about (wpctl status, Audio > Sinks)."""
+    code, out = _run(["wpctl", "status"])
+    outs = []
+    section = None
+    in_audio = False
+    for line in (out or "").splitlines():
+        clean = line.replace("│", " ").replace("├", " ").replace("└", " ").replace("─", " ").rstrip()
+        if not clean.strip():
+            continue
+        if not line.startswith((" ", "│", "├", "└")):
+            in_audio = clean.strip() == "Audio"
+            continue
+        head = clean.strip()
+        if head.endswith(":"):
+            section = head[:-1]
+            continue
+        if in_audio and section == "Sinks":
+            m = re.match(r"^\s*(\*)?\s*(\d+)\.\s+(.*?)\s*(\[vol:[^\]]*\])?\s*$", clean)
+            if m:
+                outs.append({"id": int(m.group(2)), "name": m.group(3).strip(), "default": bool(m.group(1))})
+    return outs
+
+
+def sound_state():
+    if IS_WINDOWS or not shutil.which("wpctl"):
+        return None
+    st = _volume("@DEFAULT_AUDIO_SINK@") or {"volume": None, "muted": False}
+    st["outputs"] = sound_outputs()
+    mic = _volume("@DEFAULT_AUDIO_SOURCE@")
+    st["mic"] = mic
+    return st
+
+
+def sound_change(body):
+    if IS_WINDOWS or not shutil.which("wpctl"):
+        return False
+    ok = True
+    if "volume" in body:
+        try:
+            v = max(0.0, min(1.0, float(body["volume"])))
+        except (TypeError, ValueError):
+            return False
+        ok = _run(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "%.2f" % v])[0] == 0 and ok
+    if body.get("mute") in ("toggle", True, False):
+        val = "toggle" if body["mute"] == "toggle" else ("1" if body["mute"] else "0")
+        ok = _run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", val])[0] == 0 and ok
+    if body.get("micMute") in ("toggle", True, False):
+        val = "toggle" if body["micMute"] == "toggle" else ("1" if body["micMute"] else "0")
+        ok = _run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", val])[0] == 0 and ok
+    if "output" in body:
+        out_id = to_int(body["output"])
+        if out_id <= 0 or out_id not in {o["id"] for o in sound_outputs()}:
+            return False
+        ok = _run(["wpctl", "set-default", str(out_id)])[0] == 0 and ok
+    return ok
+
+
+def net_state():
+    if IS_WINDOWS or not shutil.which("nmcli"):
+        return None
+    st = {"type": None, "name": "", "signal": None, "online": None}
+    _, out = _run(["nmcli", "-t", "-f", "TYPE,STATE,CONNECTION", "device"])
+    for line in (out or "").splitlines():
+        parts = line.split(":", 2)
+        if len(parts) == 3 and parts[1] == "connected" and parts[0] in ("ethernet", "wifi"):
+            if st["type"] != "ethernet":  # cable wins
+                st["type"], st["name"] = parts[0], parts[2].replace("\\:", ":")
+    if st["type"] == "wifi":
+        _, out = _run(["nmcli", "-t", "-f", "IN-USE,SIGNAL", "device", "wifi", "list", "--rescan", "no"])
+        for line in (out or "").splitlines():
+            if line.startswith("*:"):
+                st["signal"] = to_int(line.split(":")[1], None)
+    _, out = _run(["nmcli", "-t", "-f", "CONNECTIVITY", "general"])
+    st["online"] = (out or "").strip() or None
+    return st
+
+
+def controller_batteries():
+    """Battery of controllers (and other wireless devices) the system reports."""
+    found = []
+    base = "/sys/class/power_supply"
+    if IS_WINDOWS or not os.path.isdir(base):
+        return found
+    for name in sorted(os.listdir(base)):
+        d = os.path.join(base, name)
+
+        def rd(f):
+            try:
+                with open(os.path.join(d, f), "r") as fh:
+                    return fh.read().strip()
+            except OSError:
+                return ""
+        if rd("scope").lower() != "device":
+            continue
+        cap = rd("capacity")
+        found.append({"name": rd("model_name") or name, "percent": to_int(cap, None) if cap else None,
+                      "level": rd("capacity_level"), "status": rd("status")})
+    return found
+
+
+_update_cache = {"t": 0.0, "v": None}
+
+
+def kos_update_state():
+    """Is a K.OS update downloaded and waiting for a restart? (rpm-ostree)"""
+    if IS_WINDOWS or not shutil.which("rpm-ostree"):
+        return None
+    if time.time() - _update_cache["t"] < 120:
+        return _update_cache["v"]
+    code, out = _run(["rpm-ostree", "status", "--json"], timeout=8)
+    v = None
+    if code == 0:
+        try:
+            deps = json.loads(out).get("deployments", [])
+            booted = next((d for d in deps if d.get("booted")), {})
+            staged = next((d for d in deps if d.get("staged")), None)
+            v = {"version": booted.get("version") or "", "ready": bool(staged),
+                 "readyVersion": (staged or {}).get("version") or ""}
+        except ValueError:
+            v = None
+    _update_cache.update(t=time.time(), v=v)
+    return v
+
+
+def pictures_dir():
+    code, out = _run(["xdg-user-dir", "PICTURES"])
+    base = out.strip() if code == 0 and out.strip() else os.path.expanduser("~/Pictures")
+    return os.path.join(base, "K.OS")
+
+
+def take_screenshot(delay=0.8):
+    """Saves a picture of the screen (after the Quick Menu has closed)."""
+    if IS_WINDOWS or not shutil.which("spectacle"):
+        return None
+    folder = pictures_dir()
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, time.strftime("K.OS %Y-%m-%d %H-%M-%S.png"))
+
+    def shoot():
+        time.sleep(delay)
+        _run(["spectacle", "--background", "--nonotify", "--fullscreen", "--output", path], timeout=15)
+        log.info("screenshot %s", path if os.path.exists(path) else "failed")
+    threading.Thread(target=shoot, daemon=True).start()
+    return path
+
+
+def power_action(kind):
+    if IS_WINDOWS:
+        return False
+    cmd = {"sleep": ["systemctl", "suspend"], "restart": ["systemctl", "reboot"],
+           "off": ["systemctl", "poweroff"], "windows": ["/usr/bin/kos-boot-windows"]}.get(kind)
+    if not cmd:
+        return False
+    run_detached(cmd)
+    return True
+
 # ---------------------------------------------------------------- actions
 
 def run_detached(cmd):
@@ -974,8 +1159,40 @@ def open_app(app_id):
     exe = cmd[0] if os.path.isabs(cmd[0]) else shutil.which(cmd[0])
     if not exe or not os.path.exists(exe):
         return True, "missing"
-    run_detached([exe] + cmd[1:])
+    if app_id in WEBAPP_NAMES:
+        proc = subprocess.Popen([exe] + cmd[1:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+        with WEBAPPS_LOCK:
+            WEBAPPS[app_id] = proc
+    else:
+        run_detached([exe] + cmd[1:])
     return True, None
+
+
+WEBAPP_NAMES = {"netflix": "Netflix", "hbomax": "HBO Max", "xcloud": "Xbox Bulut Oyun", "browser": "İnternet"}
+WEBAPPS = {}
+WEBAPPS_LOCK = threading.Lock()
+
+
+def open_webapps():
+    """K.OS web apps that are still open, newest first."""
+    with WEBAPPS_LOCK:
+        for k in [k for k, p in WEBAPPS.items() if p.poll() is not None]:
+            WEBAPPS.pop(k)
+        return [{"id": k, "name": WEBAPP_NAMES[k]} for k in reversed(list(WEBAPPS))]
+
+
+def close_webapp(app_id):
+    import signal
+    with WEBAPPS_LOCK:
+        p = WEBAPPS.get(app_id)
+    if not p or p.poll() is not None:
+        return False
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+    except OSError:
+        p.terminate()
+    return True
 
 
 # ---------------------------------------------------------------- web server
@@ -1053,6 +1270,10 @@ class Handler(BaseHTTPRequestHandler):
                             "name": self.server.game_name(appid) if appid else ""})
             return
 
+        if path == "/api/quick":
+            self.send_json(self.server.quick_state())
+            return
+
         if path == "/api/controller":
             ctl = self.server.controller
             self.send_json({"ok": True, "config": ctl.load(), "status": input_layer_status(),
@@ -1110,6 +1331,24 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001 (report any failure to the launcher)
                 log.warning("launch %d failed: %s", appid, e)
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path in ("/api/sound", "/api/webapp/close", "/api/screenshot") or path.startswith("/api/power/"):
+            try:
+                data = json.loads(body.decode("utf-8") or "{}")
+            except ValueError:
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            if path == "/api/sound":
+                self.send_json({"ok": sound_change(data), "sound": sound_state()})
+            elif path == "/api/webapp/close":
+                self.send_json({"ok": close_webapp(str(data.get("id", "")))})
+            elif path == "/api/screenshot":
+                shot = take_screenshot()
+                self.send_json({"ok": bool(shot), "path": shot})
+            else:
+                self.send_json({"ok": power_action(path.rsplit("/", 1)[1])})
             return
 
         if path == "/api/game/resume":
@@ -1181,6 +1420,24 @@ class Server(ThreadingHTTPServer):
             if g["appid"] == appid:
                 return {"controller": g.get("controller"), "deck": g.get("deck")}
         return None
+
+    def quick_state(self):
+        """Everything the Quick Menu shows, in one answer."""
+        snap = self.steam.snapshot()
+        appid = self.watcher.running()
+        game = None
+        if appid:
+            g = next((x for x in snap.get("games", []) if x["appid"] == appid), None) or {}
+            cfg = self.controller.load()
+            mode = (cfg["games"].get(str(appid)) or {}).get("mode", "auto")
+            game = {"appid": appid, "name": g.get("name") or "Oyun", "controller": g.get("controller"),
+                    "deck": g.get("deck"), "playtimeMin": g.get("playtimeMin", 0), "layoutMode": mode}
+        layer = input_layer_status()
+        return {"ok": True, "platform": "windows" if IS_WINDOWS else "linux", "game": game,
+                "webapps": open_webapps(), "sound": sound_state(), "net": net_state(),
+                "batteries": controller_batteries(), "pads": layer.get("pads", []) if layer.get("fresh") else [],
+                "layer": {"running": bool(layer.get("fresh")), "enabled": layer.get("enabled", True)},
+                "downloads": snap.get("downloads", []), "update": kos_update_state(), "time": int(time.time())}
 
     def game_name(self, appid):
         for g in self.steam.snapshot().get("games", []):

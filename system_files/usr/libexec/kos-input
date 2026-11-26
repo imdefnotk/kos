@@ -4,9 +4,12 @@
 K.OS controller layer.
 
 K.OS owns the controller, like a console does:
-  - the Xbox (guide) button belongs to K.OS: it brings up K.OS Home over a
-    running game, and goes back to the game when pressed again. Steam never
-    sees it, so it cannot open its own overlay or Big Picture with it.
+  - the Xbox (guide) button belongs to K.OS, like the PS button on a PS5:
+      tap  = the K.OS Quick Menu over the game or app (press again to close it)
+      hold = K.OS Home (the game keeps running behind it)
+    Steam never sees it, so it cannot open its own overlay or Big Picture with it.
+    While the Quick Menu is open, the controller drives only the menu; the game
+    gets nothing (no accidental jumps or shots).
   - Xbox button + View = Escape, in every game (games like Undertale need
     Escape to quit). Hold the Xbox button, press View.
   - every button can do something else, per game: another controller button,
@@ -58,6 +61,7 @@ STICK_KEY_ON = 0.55       # stick as keys: pressed above this
 STICK_KEY_OFF = 0.35      # ... released below this
 DEADZONE = 0.15
 MOUSE_SPEED = 1400.0      # pixels per second at full right stick
+GUIDE_HOLD = 0.8          # seconds: Xbox button held this long = K.OS Home
 STEAM_VENDOR = 0x28DE
 KEYS_DEVICE_NAME = "K.OS Controller Keys"
 
@@ -162,6 +166,90 @@ def kos_action(name):
     threading.Thread(target=run, daemon=True).start()
 
 
+class HomeLink:
+    """Line-based link to the K.OS Home shell ($XDG_RUNTIME_DIR/kos-home.sock of
+    the user at the screen). Sends menu / home, receives menu-open / menu-closed
+    and key requests. Without the shell (developer desktop), the Xbox button
+    falls back to the K.OS Console window actions."""
+
+    def __init__(self):
+        self.sock = None
+        self.path = None
+        self.buf = b""
+        self.menu_open = False
+
+    def connect(self):
+        import socket
+        user = active_user()
+        path = "/run/user/%d/kos-home.sock" % user[1] if user else None
+        if self.sock and path == self.path:
+            return
+        self.close()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(1.0)
+            s.connect(path)
+            s.setblocking(False)
+            self.sock, self.path = s, path
+            log.info("linked to K.OS Home (%s)", path)
+        except OSError:
+            pass
+
+    def close(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        self.sock = None
+        self.path = None
+        self.buf = b""
+        self.menu_open = False
+
+    def send(self, line):
+        if not self.sock:
+            return False
+        try:
+            self.sock.sendall((line + "\n").encode())
+            return True
+        except OSError:
+            self.close()
+            return False
+
+    def read(self):
+        """Returns the lines received (call when the socket is readable)."""
+        try:
+            data = self.sock.recv(4096)
+        except BlockingIOError:
+            return []
+        except OSError:
+            data = b""
+        if not data:
+            log.info("K.OS Home link closed")
+            self.close()
+            return []
+        self.buf += data
+        lines = []
+        while b"\n" in self.buf:
+            line, self.buf = self.buf.split(b"\n", 1)
+            lines.append(line.decode("utf-8", "replace").strip())
+        if len(self.buf) > 4096:
+            self.buf = b""
+        return lines
+
+
+def xbox_tap(link):
+    if not (link and link.send("menu")):
+        kos_action("KOS Toggle Home")
+
+
+def xbox_hold(link):
+    if not (link and link.send("home")):
+        kos_action("KOS Show Home")
+
+
 # ---------------------------------------------------------------- hiding the real controller
 
 def device_nodes(event_path):
@@ -242,8 +330,12 @@ class Pad:
                 self.name_of[c] = n
         self.guide = {e.BTN_MODE, e.KEY_HOMEPAGE}
         self.guide_down = False
+        self.guide_since = 0.0
         self.guide_used = False
         self.chord_esc = False
+        self.link = None
+        self.menu = False
+        self.menu_keys = {}      # nav key code -> pressed
         # Triggers and right stick differ between drivers
         if e.ABS_GAS in self.absinfo and e.ABS_BRAKE in self.absinfo:
             self.trig = {"LT": e.ABS_BRAKE, "RT": e.ABS_GAS}
@@ -349,6 +441,9 @@ class Pad:
             self.target_down(name, m.get("tap", ""), down)
 
     def tick(self, now):
+        if self.guide_down and not self.guide_used and now - self.guide_since >= GUIDE_HOLD:
+            self.guide_used = True
+            xbox_hold(self.link)
         for name, since in list(self.pending.items()):
             if now - since >= HOLD_TIME:
                 del self.pending[name]
@@ -374,7 +469,7 @@ class Pad:
         self.clone.syn()
 
     def busy(self):
-        return bool(self.pending or self.pulses or (self.layout["rightStick"] == "mouse" and any(
+        return bool(self.guide_down or self.pending or self.pulses or (self.layout["rightStick"] == "mouse" and any(
             abs(self.stick.get(c, 0.0)) > DEADZONE for c in self.rstick)))
 
     def stick_as_keys(self, mode):
@@ -414,10 +509,70 @@ class Pad:
         if self.chord_esc:
             self.chord_esc = False
             self.keys.press(e.KEY_ESC, 0)
+        for code, down in list(self.menu_keys.items()):
+            if down:
+                self.keys.press(code, 0)
+        self.menu_keys = {}
         try:
             self.clone.syn()
         except OSError:
             pass
+
+    # -- Quick Menu: the controller drives only the menu (as keys), the game gets nothing
+    MENU_KEYS = {"A": e.KEY_ENTER, "B": e.KEY_ESC, "MENU": e.KEY_ENTER, "VIEW": e.KEY_ESC,
+                 "X": e.KEY_X, "Y": e.KEY_Y, "LB": e.KEY_Q, "RB": e.KEY_E,
+                 "UP": e.KEY_UP, "DOWN": e.KEY_DOWN, "LEFT": e.KEY_LEFT, "RIGHT": e.KEY_RIGHT}
+
+    def menu_key(self, code, down):
+        if self.menu_keys.get(code, False) == down:
+            return
+        self.menu_keys[code] = down
+        self.keys.press(code, 1 if down else 0)
+
+    def menu_button(self, name, value):
+        if name in self.MENU_KEYS and value in (0, 1):
+            self.menu_key(self.MENU_KEYS[name], value == 1)
+
+    def menu_axis(self, code, value):
+        if code in (e.ABS_HAT0X, e.ABS_HAT0Y):
+            neg, pos = (e.KEY_LEFT, e.KEY_RIGHT) if code == e.ABS_HAT0X else (e.KEY_UP, e.KEY_DOWN)
+            self.menu_key(neg, value < 0)
+            self.menu_key(pos, value > 0)
+        elif code in self.lstick:
+            self.stick[code] = self.norm(code, value)
+            x = self.stick.get(self.lstick[0], 0.0)
+            y = self.stick.get(self.lstick[1], 0.0)
+            for key, v in ((e.KEY_LEFT, -x), (e.KEY_RIGHT, x), (e.KEY_UP, -y), (e.KEY_DOWN, y)):
+                on = self.menu_keys.get(key, False)
+                if not on and v > STICK_KEY_ON:
+                    self.menu_key(key, True)
+                elif on and v < STICK_KEY_OFF:
+                    self.menu_key(key, False)
+        elif code in self.trig_name:
+            pass
+
+    def set_menu(self, on):
+        if on == self.menu:
+            return
+        self.menu = on
+        if on:
+            # Let go of everything in the game and put sticks and triggers at rest
+            self.release_all()
+            for code in self.lstick + self.rstick + tuple(self.trig.values()):
+                if code in self.absinfo:
+                    self.clone.write(e.EV_ABS, code, self.center(code))
+            for axis in (e.ABS_HAT0X, e.ABS_HAT0Y):
+                if axis in self.absinfo:
+                    self.clone.write(e.EV_ABS, axis, 0)
+            self.out_hat = {e.ABS_HAT0X: 0, e.ABS_HAT0Y: 0}
+            self.hat = {e.ABS_HAT0X: 0, e.ABS_HAT0Y: 0}
+            self.clone.syn()
+        else:
+            for code, down in list(self.menu_keys.items()):
+                if down:
+                    self.keys.press(code, 0)
+            self.menu_keys = {}
+            self.stick = {}
 
     def set_layout(self, layout):
         if layout != self.layout:
@@ -435,11 +590,15 @@ class Pad:
             if ev.code in self.guide:
                 if ev.value == 1:
                     self.guide_down = True
+                    self.guide_since = now
                     self.guide_used = False
                 elif ev.value == 0:
                     if self.guide_down and not self.guide_used:
-                        kos_action("KOS Toggle Home")
+                        xbox_tap(self.link)
                     self.guide_down = False
+                return
+            if self.menu:
+                self.menu_button(self.name_of.get(ev.code), ev.value)
                 return
             name = self.name_of.get(ev.code)
             # Xbox button + View = Escape
@@ -462,6 +621,9 @@ class Pad:
                 self.button(name, ev.value == 1, now)
         elif ev.type == e.EV_ABS:
             code = ev.code
+            if self.menu:
+                self.menu_axis(code, ev.value)
+                return
             if code in (e.ABS_HAT0X, e.ABS_HAT0Y):
                 old = self.hat[code]
                 self.hat[code] = ev.value
@@ -581,6 +743,19 @@ class Keys:
                 self.ui.write(e.EV_KEY, code, 0)
                 self.ui.syn()
 
+    def combo(self, names):
+        """Presses keys together and lets go, for example ["KEY_LEFTSHIFT", "KEY_TAB"]."""
+        codes = [e.ecodes.get(n) for n in names]
+        if not codes or any(c not in ALL_KEYS for c in codes):
+            return
+        for c in codes:
+            self.ui.write(e.EV_KEY, c, 1)
+        self.ui.syn()
+        time.sleep(0.03)
+        for c in reversed(codes):
+            self.ui.write(e.EV_KEY, c, 0)
+        self.ui.syn()
+
     def move(self, dx, dy):
         if dx:
             self.ui.write(e.EV_REL, e.REL_X, dx)
@@ -614,10 +789,14 @@ def is_real_controller(dev):
         return False
     if (dev.phys or "").startswith("kos-input/"):
         return False
+    # Devices made by programs (uinput: Steam, K.OS, others) live under
+    # /devices/virtual/input. Bluetooth controllers also sit under /devices/virtual
+    # (misc/uhid), and those are real, so only the uinput ones are skipped.
     try:
-        if "/virtual/" in os.path.realpath("/sys/class/input/%s/device" % os.path.basename(dev.path)):
-            return False
+        sys_path = os.path.realpath("/sys/class/input/%s/device" % os.path.basename(dev.path))
     except OSError:
+        return False
+    if "/devices/virtual/input/" in sys_path + "/" and "/uhid/" not in sys_path:
         return False
     return True
 
@@ -634,6 +813,7 @@ class Layer:
         self.source = "standard"
         self.settings_stamp = None
         self.running = True
+        self.link = HomeLink()
 
     def refresh_settings(self):
         enabled, layout, source = read_settings()
@@ -668,7 +848,9 @@ class Layer:
                     self.keys = Keys()
                 dev.grab()
                 pad = Pad(dev, self.keys)
+                pad.link = self.link
                 pad.set_layout(self.layout)
+                pad.set_menu(self.link.menu_open)
                 pad.nodes = device_nodes(path)
                 self.hider.hide(pad.nodes)
                 self.pads[path] = pad
@@ -703,6 +885,7 @@ class Layer:
             os.makedirs(RUN_DIR, exist_ok=True)
             os.chmod(RUN_DIR, 0o755)
             st = {"running": True, "enabled": self.enabled, "source": self.source, "time": time.time(),
+                  "linked": bool(self.link.sock), "menu": self.link.menu_open,
                   "pads": [{"name": p.dev.name, "vendor": "%04x" % p.dev.info.vendor,
                             "product": "%04x" % p.dev.info.product} for p in self.pads.values()]}
             tmp = STATUS + ".tmp"
@@ -720,9 +903,13 @@ class Layer:
             if now - last_scan >= SCAN_EVERY:
                 self.refresh_settings()
                 self.scan()
+                if self.enabled:
+                    self.link.connect()
                 self.write_status()
                 last_scan = now
             fds = {}
+            if self.link.sock:
+                fds[self.link.sock.fileno()] = (None, "link")
             for path, p in self.pads.items():
                 fds[p.dev.fd] = (path, "real")
                 fds[p.clone.fd] = (path, "clone")
@@ -734,6 +921,9 @@ class Layer:
             now = time.monotonic()
             for fd in ready:
                 path, kind = fds[fd]
+                if kind == "link":
+                    self.link_lines(self.link.read() if self.link.sock else [])
+                    continue
                 pad = self.pads.get(path)
                 if not pad:
                     continue
@@ -754,6 +944,22 @@ class Layer:
                     pad.tick(now)
                 except OSError:
                     self.drop(path, "controller gone")
+
+    def link_lines(self, lines):
+        was = self.link.menu_open
+        for line in lines:
+            if line == "menu-open":
+                self.link.menu_open = True
+            elif line == "menu-closed":
+                self.link.menu_open = False
+            elif line.startswith("key ") and self.keys:
+                self.keys.combo(line[4:].split("+")[:4])
+        if not self.link.sock:
+            self.link.menu_open = False
+        if self.link.menu_open != was:
+            log.info("Quick Menu %s", "open" if self.link.menu_open else "closed")
+        for p in self.pads.values():
+            p.set_menu(self.link.menu_open)
 
     def shutdown(self):
         self.drop_all()

@@ -30,7 +30,8 @@ systemctl reboot
 | `system_files/usr/bin/kos-home` | Starts the helper and the K.OS Home shell (`--list`, `--quit`, `--here`) |
 | `shell/` | K.OS Home shell: Electron app that shows K.OS Home full screen with no browser parts, plays the startup video at power on |
 | `kwin/kos-console/` | K.OS window rules: K.OS Home always full screen, games full screen in front, back to K.OS Home when they close, Steam only in Big Picture |
-| `system_files/usr/libexec/kos-input` (+ `kos-input.service`) | K.OS controller layer: Xbox button opens K.OS Home over a game, Xbox + View = Esc, button layouts per game (keys, mouse, other buttons), rumble passed through |
+| `system_files/usr/libexec/kos-input` (+ `kos-input.service`) | K.OS controller layer: Xbox button tap = Quick Menu, hold = K.OS Home; Xbox + View = Esc; button layouts per game (keys, mouse, other buttons); rumble passed through |
+| `launcher/menu.html`, `css/menu.css`, `js/menu.js` | K.OS Quick Menu (PS5 style) over any game or app: game/app actions, downloads and updates, sound, microphone, controller, internet, screenshot, power |
 | `system_files/usr/libexec/kos-shortcuts` | Keyboard shortcuts in the K.OS session: only Alt+Tab, Alt+Shift+Tab, Alt+F4; Plasma's own shortcuts come back on the developer desktop |
 | `system_files/usr/bin/kos-session` | Developer Plasma desktop only: refreshes K.OS launchers |
 | `system_files/usr/bin/kos-webapp` | Full-screen Google Chrome tiles |

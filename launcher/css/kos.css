@@ -171,6 +171,7 @@ h1, p { margin: 0; }
 .status-icon.off { color: #71717A; }
 .clock { font-variant-numeric: tabular-nums; }
 .avatar {
+  position: relative; padding: 0;
   width: 52px; height: 52px; border-radius: 50%;
   background: var(--panel-2); border: 2px solid var(--line-2);
   display: flex; align-items: center; justify-content: center;
@@ -526,3 +527,10 @@ main { position: absolute; inset: 0; }
 .ctl-btn.hold { color: var(--muted); }
 .ctl-game .badges { display: flex; gap: 10px; flex-wrap: wrap; }
 .ctl-game .chip-badge { height: 32px; font-size: 15px; padding: 0 12px; }
+
+/* Profile button = Ayarlar */
+.avatar-gear { position: absolute; right: -8px; bottom: -8px; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--ground); border: 2px solid var(--line-2); display: flex; align-items: center; justify-content: center; color: var(--soft); }
+.avatar-gear svg { width: 16px; height: 16px; }
+.avatar.focused { outline: none; box-shadow: 0 0 0 4px rgba(244,244,245,0.85); }
+.avatar.active { border-color: var(--accent); }

@@ -35,6 +35,18 @@ if [ -f "${LOG}" ] && [ "$(stat -c %s "${LOG}" 2>/dev/null || echo 0)" -gt 10000
     mv -f "${LOG}" "${LOG}.old"
 fi
 
+# The K.OS session hands its screen address (WAYLAND_DISPLAY, DISPLAY) and
+# KOS_SESSION to the user's background services. Those must never outlive it:
+# Plasma started with an old WAYLAND_DISPLAY tries to run inside a screen that
+# is gone and fails (black screen). So every start begins clean.
+clean_env() {
+    systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XAUTHORITY KOS_SESSION >/dev/null 2>&1 || true
+    unset WAYLAND_DISPLAY DISPLAY KOS_SESSION
+}
+clean_env
+
+PLASMA_STARTS="${STATE_DIR}/plasma-starts"
+
 start_plasma() {
     # Start the normal Plasma session exactly the way the login screen would
     local line=""
@@ -44,9 +56,23 @@ start_plasma() {
     [ -n "${line}" ] || line="/usr/bin/startplasma-wayland"
     # Plasma's own keyboard shortcuts and hot corners back (see kos-shortcuts)
     /usr/libexec/kos-shortcuts restore >> "${LOG}" 2>&1 || true
+    clean_env
+    # Remember when Plasma was started (restart-loop guard below)
+    echo "$(date +%s) $(head -n 2 "${PLASMA_STARTS}" 2>/dev/null | tr '\n' ' ')" | tr ' ' '\n' | grep -v '^$' | head -n 3 > "${PLASMA_STARTS}.tmp" && mv -f "${PLASMA_STARTS}.tmp" "${PLASMA_STARTS}"
     log "starting Plasma desktop: ${line}"
     exec /bin/sh -c "${line}"
 }
+
+# Safety net for the developer desktop: if Plasma was started 3 times within
+# 2 minutes, it keeps failing. Go back to the K.OS console instead of looping.
+if [ -f "${MARK}" ] && [ -f "${PLASMA_STARTS}" ]; then
+    oldest="$(tail -n 1 "${PLASMA_STARTS}")"
+    count="$(wc -l < "${PLASMA_STARTS}")"
+    if [ "${count}" -ge 3 ] && [ $(( $(date +%s) - ${oldest:-0} )) -lt 120 ]; then
+        log "Plasma keeps failing to start, back to the K.OS console (desktop mode file removed)"
+        rm -f "${MARK}" "${PLASMA_STARTS}"
+    fi
+fi
 
 if [ -f "${MARK}" ]; then
     log "desktop mode file found"

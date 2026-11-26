@@ -150,29 +150,23 @@ window.KOS_DATA = {
   ],
 
   settingsCategories: [
-    { id: 'internet', name: 'İnternet' },
-    { id: 'bluetooth', name: 'Bluetooth ve Kumandalar' },
-    { id: 'kumanda', name: 'Kumanda Tuşları' },
+    { id: 'baglanti', name: 'İnternet ve Bluetooth' },
+    { id: 'kumanda', name: 'Kumandalar' },
     { id: 'ekran', name: 'Ekran' },
     { id: 'ses', name: 'Ses' },
-    { id: 'guc', name: 'Güç ve Uyku' },
-    { id: 'windows', name: 'Windows' },
+    { id: 'guc', name: 'Güç ve Windows' },
     { id: 'hesaplar', name: 'Hesaplar' },
     { id: 'dil', name: 'Dil ve Bölge' },
-    { id: 'guncelleme', name: 'Güncellemeler', badge: '1' },
-    { id: 'sistem', name: 'Sistem Bilgisi' }
+    { id: 'sistem', name: 'Sistem ve Güncellemeler', badge: '1' }
   ],
 
   /* What each settings page will hold once it is connected to the system (phase 4). */
   settingsPlans: {
-    internet: ['Wi-Fi ağları ve şifre girişi', 'Kablolu bağlantı', 'Bağlantı testi'],
-    bluetooth: ['Kumanda eşleştirme', 'Kulaklık ve hoparlör', 'Kumanda titreşimi ve pil'],
+    baglanti: ['Wi-Fi ağları ve şifre girişi', 'Kablolu bağlantı ve bağlantı testi', 'Bluetooth: kumanda, kulaklık ve hoparlör eşleştirme'],
     ses: ['Ses düzeyi', 'Çıkış seçimi: TV, kulaklık, hoparlör', 'Mikrofon'],
-    guc: ['Uyku zamanlayıcısı', 'Kumandayla uyandırma', 'Ekran koruyucu'],
-    windows: ["Windows'a Geç", 'Windows ile saat uyumu', 'Varsayılan açılış sistemi'],
+    guc: ['Uyku zamanlayıcısı', 'Kumandayla uyandırma', 'Ekran koruyucu', 'Varsayılan açılış sistemi'],
     hesaplar: ['Steam, Epic ve GOG girişleri', 'Profil adı ve resmi', 'Ebeveyn denetimi'],
     dil: ['Dil: Türkçe', 'Klavye: Türkçe Q', 'Saat dilimi: İstanbul'],
-    guncelleme: ['K.OS güncellemesi hazır', 'Otomatik güncelleme', 'Önceki sürüme dön'],
-    sistem: ['İşlemci, ekran kartı, bellek', 'Depolama alanı', 'K.OS sürümü']
+    sistem: ['K.OS güncellemesi hazır', 'Otomatik güncelleme', 'Önceki sürüme dön', 'İşlemci, ekran kartı, bellek, depolama', 'K.OS sürümü']
   }
 };

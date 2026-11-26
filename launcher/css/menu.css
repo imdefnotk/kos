@@ -1,0 +1,105 @@
+/* K.OS Quick Menu. Designed at 1920x1080 and scaled to fit; the page itself is
+   see-through so the game stays visible behind it. */
+
+:root {
+  --accent: #E5322D;
+  --accent-rgb: 229, 50, 45;
+  --ink: #F4F4F5;
+  --muted: #A1A1AA;
+  --soft: #D4D4D8;
+  --ground: #0A0A0C;
+  --panel: #141417;
+  --panel-2: #1F1F23;
+  --line: #27272A;
+  --line-2: #3F3F46;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; cursor: none; }
+button { font: inherit; color: inherit; border: 0; background: none; padding: 0; }
+button:focus { outline: none; }
+h1, p { margin: 0; }
+
+.stage {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0;
+  font-family: 'Inter', system-ui, sans-serif; color: var(--ink);
+  opacity: 0; transition: opacity 0.16s ease;
+}
+.stage.shown { opacity: 1; }
+.shade {
+  position: absolute; inset: 0;
+  background: linear-gradient(to bottom, rgba(10,10,12,0.20) 0%, rgba(10,10,12,0.30) 30%,
+              rgba(10,10,12,0.86) 50%, rgba(10,10,12,0.95) 100%);
+}
+
+.clock { position: absolute; right: 96px; top: 52px; font-size: 44px; font-weight: 500; letter-spacing: 0.02em;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.6); }
+
+.area { position: absolute; left: 0; right: 0; top: 380px; }
+.area-head { padding: 0 96px; display: flex; flex-direction: column; gap: 6px; margin-bottom: 22px; }
+.area-kicker { font-size: 17px; font-weight: 600; letter-spacing: 0.16em; color: var(--muted); text-transform: uppercase; }
+.area-title { font-family: 'Space Grotesk', 'Inter', sans-serif; font-size: 44px; font-weight: 700; letter-spacing: -0.02em; }
+
+.cards-wrap { overflow: visible; padding: 0 96px; height: 360px; }
+.cards { display: flex; gap: 22px; align-items: flex-end; transition: transform 0.22s ease; height: 100%; }
+
+.card {
+  position: relative; flex: 0 0 auto; width: 400px; height: 320px; border-radius: 26px;
+  background: rgba(20,20,23,0.94); border: 1px solid var(--line);
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; padding: 28px 30px;
+  text-align: left; overflow: hidden; transition: transform 0.16s ease, height 0.16s ease;
+}
+.card .card-icon { position: absolute; left: 28px; top: 28px; width: 64px; height: 64px; border-radius: 16px;
+  background: var(--panel-2); display: flex; align-items: center; justify-content: center; }
+.card .card-icon svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.card .art { position: absolute; inset: 0; background-size: cover; background-position: center; }
+.card .art::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0,0,0,0) 30%, rgba(10,10,12,0.92) 88%); }
+.card > *:not(.art):not(.card-icon) { position: relative; }
+.card .k { font-size: 18px; color: var(--muted); }
+.card .t { font-size: 30px; font-weight: 700; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .s { font-size: 18px; color: var(--soft); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .big { font-family: 'Space Grotesk', 'Inter', sans-serif; font-size: 84px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
+.card .bar-line { height: 10px; border-radius: 5px; background: var(--line-2); overflow: hidden; margin-top: 8px; }
+.card .bar-line > div { height: 100%; background: var(--ink); }
+.card .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 16px;
+  background: rgba(31,31,35,0.95); border: 1px solid var(--line-2); font-size: 15px; font-weight: 600; color: var(--soft); }
+.chip::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: #71717A; }
+.chip.good::before { background: #22C55E; } .chip.ok::before { background: #EAB308; } .chip.bad::before { background: #E5322D; }
+.card.on { border-color: var(--line-2); }
+.card.on .state { color: #22C55E; }
+.card .state { font-size: 18px; font-weight: 600; color: var(--muted); }
+
+.card.focused { height: 360px; border: 3px solid var(--ink); box-shadow: 0 18px 50px rgba(0,0,0,0.55); }
+.card.focused::before {
+  content: ''; position: absolute; right: 24px; top: 24px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 16px 3px rgba(var(--accent-rgb), 0.7); z-index: 2;
+}
+.card.adjusting { border-color: var(--accent); }
+.card.confirm { border-color: var(--accent); }
+
+.bar {
+  position: absolute; left: 0; right: 0; top: 884px; height: 100px;
+  display: flex; justify-content: center; align-items: center; gap: 34px;
+}
+.bar-btn {
+  position: relative; width: 84px; height: 84px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; color: var(--soft);
+}
+.bar-btn svg { width: 40px; height: 40px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.bar-btn img { width: 64px; height: 64px; border-radius: 14px; object-fit: cover; }
+.bar-btn .badge { position: absolute; right: 8px; top: 8px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); }
+.bar-btn.current::after { content: ''; position: absolute; bottom: -14px; left: 50%; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--accent); }
+.bar-btn.focused { background: var(--ink); color: var(--ground); box-shadow: 0 0 0 6px rgba(244,244,245,0.18); }
+.bar-btn.focused img { width: 72px; height: 72px; }
+
+.hints { position: absolute; left: 96px; right: 96px; bottom: 26px; display: flex; gap: 34px; font-size: 18px; color: var(--muted); }
+.hint { display: inline-flex; align-items: center; gap: 10px; }
+.glyph { min-width: 32px; height: 32px; padding: 0 9px; border-radius: 16px; border: 2px solid var(--line-2); display: inline-flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: var(--soft); }
+
+.toast {
+  position: absolute; left: 50%; top: 300px; transform: translate(-50%, 10px); opacity: 0;
+  padding: 16px 30px; border-radius: 28px; background: rgba(31,31,35,0.97); border: 1px solid var(--line-2);
+  font-size: 22px; transition: opacity 0.2s, transform 0.2s; pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
