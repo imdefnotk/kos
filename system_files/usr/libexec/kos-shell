@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# K.OS shell: runs inside the K.OS session (started by kos-start-session
+# through KWin). The K.OS session lasts exactly as long as this script runs.
+#  1. Tells the rest of the system where the screen is (for apps and Flatpaks)
+#  2. Refreshes K.OS settings and launchers, one screen only
+#  3. Starts Steam hidden in the background (sign-in, downloads, games)
+#  4. Shows K.OS Home, with the K.OS startup video the first time, and shows
+#     it again if it ever closes or crashes
+# It only stops when developer desktop mode is chosen (~/.config/kos-desktop-mode).
+set -uo pipefail
+
+MARK="${HOME}/.config/kos-desktop-mode"
+export KOS_SESSION=1
+
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --systemd \
+        WAYLAND_DISPLAY DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE \
+        XDG_SESSION_DESKTOP KDE_SESSION_VERSION KOS_SESSION LANG LANGUAGE >/dev/null 2>&1 || true
+fi
+
+/usr/libexec/kos-firstboot-setup || true
+/usr/libexec/kos-single-display >/dev/null 2>&1 || true
+
+if ! pgrep -x steam >/dev/null 2>&1; then
+    /usr/libexec/kos-steam-shortcuts || true
+    nohup /usr/bin/steam -silent >/dev/null 2>&1 &
+fi
+
+# Safety net: if K.OS Home keeps closing right away, use the older Chrome
+# version of K.OS Home after 3 tries, and open the Plasma desktop after 10,
+# so the screen never stays black. Log: ~/.local/state/kos/session.log
+LOG="${XDG_STATE_HOME:-${HOME}/.local/state}/kos/session.log"
+mkdir -p "$(dirname "${LOG}")"
+quick_fails=0
+intro="--intro"
+while [ ! -f "${MARK}" ]; do
+    started=$(date +%s)
+    /usr/bin/kos-home --session ${intro} >> "${LOG}" 2>&1 || true
+    intro=""
+    if [ $(( $(date +%s) - started )) -lt 5 ]; then
+        quick_fails=$(( quick_fails + 1 ))
+        echo "$(date '+%Y-%m-%d %H:%M:%S') K.OS Home closed right away (${quick_fails} times)" >> "${LOG}"
+        if [ "${quick_fails}" -ge 10 ]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') giving up, switching to the Plasma desktop" >> "${LOG}"
+            touch "${MARK}"
+            break
+        fi
+        if [ "${quick_fails}" -ge 3 ]; then
+            export KOS_HOME_ENGINE=chrome
+        fi
+        sleep 3
+    else
+        quick_fails=0
+        sleep 0.5
+    fi
+done
+
+# Leaving for the developer desktop: close Steam properly first
+if pgrep -x steam >/dev/null 2>&1; then
+    timeout 20 /usr/bin/steam -shutdown >/dev/null 2>&1 || true
+fi
+
+exit 0

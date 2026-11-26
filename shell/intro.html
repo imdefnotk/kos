@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>K.OS Home</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+</style>
+</head>
+<body>
+<!-- K.OS startup video, played once after power on (first start of K.OS Home) -->
+<video id="v" autoplay playsinline src="file:///usr/share/kos/boot/kos-startup.webm"></video>
+<script>
+  'use strict';
+  var finished = false;
+  var shownAt = Date.now();
+  function done() {
+    if (finished) { return; }
+    finished = true;
+    if (window.kos) { window.kos.introDone(); }
+  }
+  var v = document.getElementById('v');
+  v.addEventListener('ended', done);
+  v.addEventListener('error', done);
+  var p = v.play();
+  if (p && p.catch) { p.catch(done); }
+  // Skip with Enter, Escape or Space, or any controller button (after the first second)
+  document.addEventListener('keydown', function (ev) {
+    if (Date.now() - shownAt > 1000 && (ev.key === 'Enter' || ev.key === 'Escape' || ev.key === ' ')) { done(); }
+  });
+  (function poll() {
+    if (finished) { return; }
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    if (Date.now() - shownAt > 1000) {
+      for (var i = 0; i < pads.length; i++) {
+        var pad = pads[i];
+        if (pad && pad.buttons.some(function (b) { return b.pressed; })) { done(); return; }
+      }
+    }
+    requestAnimationFrame(poll);
+  })();
+</script>
+</body>
+</html>

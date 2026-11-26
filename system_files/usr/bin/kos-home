@@ -1,51 +1,42 @@
 #!/usr/bin/env bash
-# K.OS Home: the K.OS console home screen.
-# 1. Starts the K.OS Home helper (reads your Steam games, starts them, opens K.OS apps)
-# 2. Opens K.OS Home full screen in Google Chrome
-# kos-session starts it at login. Opening it from the app menu also turns
-# developer desktop mode off, so the next start is a console again.
+# K.OS Home: the K.OS console interface.
 #
-# Check what the helper sees without opening anything:   kos-home --list
+# In the K.OS session (normal use), kos-shell starts it and keeps it running:
+#   1. Starts the K.OS Home helper (reads your Steam games, starts them, opens K.OS apps)
+#   2. Opens the K.OS Home shell: full screen, no browser parts, cannot be closed
+#      (/usr/share/kos/shell, built on Electron, installed to /usr/lib/kos-electron)
+#
+# On the Plasma desktop (developer desktop mode), opening "K.OS Home" from the
+# app menu turns desktop mode off and goes back to the K.OS console.
+#
+# Options:
+#   kos-home --list    print the Steam games the helper finds, open nothing
+#   kos-home --quit    close K.OS Home (kos-shell opens it again unless desktop mode is on)
+#   kos-home --here    open K.OS Home on the current desktop, for testing
 set -uo pipefail
 
 HOME_DIR=/usr/share/kos/home
 HELPER="${HOME_DIR}/kos-home-helper.py"
+SHELL_APP=/usr/share/kos/shell
+ELECTRON=/usr/lib/kos-electron/electron
 PORT=47800
 URL="http://127.0.0.1:${PORT}/"
 BROWSER_ID="com.google.Chrome"
-LOG="${XDG_RUNTIME_DIR:-/tmp}/kos-home-helper.log"
-
-if [ "${1:-}" = "--list" ]; then
-    exec python3 "${HELPER}" --list
-fi
-
-# Started by hand (not by kos-session): leave developer desktop mode
-if [ "${1:-}" != "--session" ]; then
-    rm -f "${HOME}/.config/kos-desktop-mode"
-fi
-
-# Only one K.OS Home at a time. The lock stays held while K.OS Home is open
-# (the browser below inherits it), so extra clicks do nothing.
-exec 9>"${XDG_RUNTIME_DIR:-/tmp}/kos-home.lock"
-if ! flock -n 9; then
-    exit 0
-fi
-
-# One screen, like a console (both monitors only on Windows)
-/usr/libexec/kos-single-display >/dev/null 2>&1 || true
-
-ping_helper() {
-    curl -fs -m 1 "${URL}api/ping" 2>/dev/null | grep -q '"kos-home"'
-}
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+LOG="${RUN_DIR}/kos-home-helper.log"
+PIDFILE="${RUN_DIR}/kos-home.pid"
+MARK="${HOME}/.config/kos-desktop-mode"
 
 case "${LANG:-}" in
     en*)
         T_NOBROWSER="The K.OS browser is still being downloaded in the background. Please make sure you are online and try again in a few minutes."
         T_NOHELPER="K.OS Home could not start. Details: ${LOG}"
+        T_TOCONSOLE="Go back to the K.OS console? Open apps on this desktop will close."
         ;;
     *)
         T_NOBROWSER="K.OS tarayıcısı arka planda hâlâ indiriliyor. Lütfen internete bağlı olduğunuzdan emin olun ve birkaç dakika sonra tekrar deneyin."
         T_NOHELPER="K.OS Home başlatılamadı. Ayrıntılar: ${LOG}"
+        T_TOCONSOLE="K.OS konsola dönülsün mü? Bu masaüstündeki açık uygulamalar kapanır."
         ;;
 esac
 
@@ -56,6 +47,61 @@ show_error() {
         zenity --warning --title="K.OS" --text="$1"
     fi
     echo "$1" >&2
+}
+
+MODE="desktop"
+INTRO=""
+for arg in "$@"; do
+    case "${arg}" in
+        --list) exec python3 "${HELPER}" --list ;;
+        --session) MODE="session" ;;
+        --here) MODE="here" ;;
+        --intro) INTRO="--kos-intro" ;;
+        --quit)
+            if [ -f "${PIDFILE}" ]; then
+                kill "$(cat "${PIDFILE}")" 2>/dev/null || true
+            fi
+            pkill -f "kos-profiles/kos-home" 2>/dev/null || true
+            exit 0
+            ;;
+    esac
+done
+
+# Already inside the K.OS session (for example started again by hand): kos-shell runs it
+if [ "${MODE}" = "desktop" ] && [ "${KOS_SESSION:-}" = "1" ]; then
+    MODE="session"
+fi
+
+# Opened from the Plasma app menu: back to the console (log out, the login
+# screen starts the K.OS session again)
+if [ "${MODE}" = "desktop" ]; then
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "K.OS" --yesno "${T_TOCONSOLE}" || exit 0
+    fi
+    rm -f "${MARK}"
+    if command -v qdbus6 >/dev/null 2>&1 && qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout >/dev/null 2>&1; then
+        exit 0
+    fi
+    if [ -n "${XDG_SESSION_ID:-}" ]; then
+        loginctl terminate-session "${XDG_SESSION_ID}"
+    fi
+    exit 0
+fi
+
+# Only one K.OS Home at a time. The lock stays held while K.OS Home is open
+# (the program below inherits it), so extra starts do nothing.
+exec 9>"${RUN_DIR}/kos-home.lock"
+if ! flock -n 9; then
+    exit 0
+fi
+
+# One screen, like a console (both monitors only on Windows)
+if [ "${MODE}" = "session" ]; then
+    /usr/libexec/kos-single-display >/dev/null 2>&1 || true
+fi
+
+ping_helper() {
+    curl -fs -m 1 "${URL}api/ping" 2>/dev/null | grep -q '"kos-home"'
 }
 
 if ! ping_helper; then
@@ -71,19 +117,25 @@ if ! ping_helper; then
     exit 1
 fi
 
+# exec keeps the same process number, so kos-home --quit can find it
+echo $$ > "${PIDFILE}"
+
+if [ "${KOS_HOME_ENGINE:-}" != "chrome" ] && [ -x "${ELECTRON}" ] && [ -f "${SHELL_APP}/main.js" ]; then
+    exec "${ELECTRON}" --ozone-platform-hint=auto "${SHELL_APP}" "--kos-url=${URL}" ${INTRO}
+fi
+
+# Fallback (older image without the K.OS Home shell): Google Chrome in kiosk mode
 if ! flatpak info "${BROWSER_ID}" >/dev/null 2>&1; then
     show_error "${T_NOBROWSER}"
     exit 1
 fi
-
 PROFILE_DIR="${HOME}/.var/app/${BROWSER_ID}/kos-profiles/kos-home"
 mkdir -p "${PROFILE_DIR}"
-
 exec flatpak run "${BROWSER_ID}" \
     "--user-data-dir=${PROFILE_DIR}" \
     --no-first-run \
     --no-default-browser-check \
     --password-store=basic \
     --autoplay-policy=no-user-gesture-required \
-    --start-fullscreen \
+    --kiosk \
     "--app=${URL}"

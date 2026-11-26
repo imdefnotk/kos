@@ -1,0 +1,9 @@
+{
+  "name": "kos-home",
+  "productName": "K.OS Home",
+  "desktopName": "kos-home.desktop",
+  "version": "1.0.0",
+  "description": "K.OS Home, the K.OS console interface",
+  "main": "main.js",
+  "license": "MIT"
+}

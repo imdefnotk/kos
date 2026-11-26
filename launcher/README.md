@@ -17,7 +17,7 @@ To check it worked: the Oyunlar page says "Steam'deki yüklü oyunların: N" and
 
 Note: the first time you open it through the helper, your launcher settings (theme color, sound) start fresh once, because the launcher now runs from a different address.
 
-**On K.OS:** after the next image update, open the app menu and start **K.OS Home**, or type `kos-home` in Konsole. To see which games the helper finds without opening anything: `kos-home --list`.
+**On K.OS:** K.OS Home is the whole interface. The K.OS session starts it at power on (after the startup video) and opens it again if it ever closes. It runs in the K.OS Home shell (`shell/` in the repo), not in a browser. To see which games the helper finds without opening anything: `kos-home --list` (in Konsole on the developer desktop).
 
 **Use Chrome or Edge, not Brave.** Brave blocks controllers by default for privacy, so the controller does nothing there.
 
@@ -88,5 +88,5 @@ See `demo-art/README.txt`. Logos you put there show on the tiles but are never u
 | `js/app.js` | Navigation, controller, theme and everything that moves |
 | `kos-home-helper.py` | The helper: Steam library, pictures, starting games and K.OS apps. Only reachable from this computer (127.0.0.1:47800) |
 | `K.OS Launcher.cmd` | Windows starter: helper + full-screen mode |
-| `/usr/bin/kos-home` (in the K.OS image) | K.OS starter: helper + full-screen Chrome |
+| `/usr/bin/kos-home` (in the K.OS image) | K.OS starter: helper + K.OS Home shell (Electron, full screen, no browser parts) |
 | `demo-art/` | Private logo folder (ignored by Git) |

@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=K.OS Console Mode
-Comment=Opens Steam Big Picture when you log in
+Name=K.OS Desktop Setup
+Comment=Refreshes the K.OS launchers on the developer desktop
 Exec=/usr/bin/kos-session
-Icon=steam
+Icon=applications-games
 Terminal=false
 NoDisplay=true
 OnlyShowIn=KDE;

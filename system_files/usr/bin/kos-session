@@ -1,41 +1,10 @@
 #!/usr/bin/env bash
-# K.OS console start (NVIDIA flavor). Started automatically when you log in.
-# 1. Refreshes your K.OS launchers and settings
-# 2. Starts Steam hidden in the background (sign-in, downloads, games)
-# 3. Opens K.OS Home full screen, and opens it again if it is ever closed,
-#    so K.OS Home is always what you see, like a console home screen
-#
-# Developer desktop mode (normal KDE desktop, both monitors):
-#   choose Ayarlar > Sistem Bilgisi > Masaüstü modu in K.OS Home,
-#   or create the empty file ~/.config/kos-desktop-mode
-# Opening "K.OS Home" from the app menu turns desktop mode off again.
+# K.OS on the Plasma desktop (developer desktop mode only).
+# The console itself is the K.OS session (kos-start-session, kos-shell): it has
+# no desktop at all. This script only runs when Plasma starts, and only
+# refreshes the K.OS launchers and settings so they are also there on the desktop.
+# To go back to the console: open "K.OS Home" from the app menu.
 set -uo pipefail
 
-DESKTOP_MODE="${HOME}/.config/kos-desktop-mode"
-
-if [ -f "${DESKTOP_MODE}" ]; then
-    exit 0
-fi
-
 /usr/libexec/kos-firstboot-setup || true
-
-if ! pgrep -x steam >/dev/null 2>&1; then
-    /usr/libexec/kos-steam-shortcuts || true
-    nohup /usr/bin/steam -silent >/dev/null 2>&1 &
-fi
-
-while [ ! -f "${DESKTOP_MODE}" ]; do
-    # The browser for K.OS Home is still being installed (first start, needs internet)
-    if ! flatpak info com.google.Chrome >/dev/null 2>&1; then
-        sleep 10
-        continue
-    fi
-    started=$(date +%s)
-    /usr/bin/kos-home --session || true
-    # If K.OS Home keeps failing right away, wait a bit longer before trying again
-    if [ $(( $(date +%s) - started )) -lt 5 ]; then
-        sleep 5
-    else
-        sleep 1
-    fi
-done
+exit 0

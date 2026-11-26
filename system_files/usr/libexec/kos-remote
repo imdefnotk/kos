@@ -54,7 +54,7 @@ BTN_X_CODES = {e.BTN_NORTH, e.BTN_WEST}   # X and Y (drivers disagree on which i
 
 OUT_KEYS = [
     e.KEY_UP, e.KEY_DOWN, e.KEY_LEFT, e.KEY_RIGHT, e.KEY_ENTER, e.KEY_ESC, e.KEY_SPACE,
-    e.KEY_TAB, e.KEY_LEFTSHIFT, e.KEY_LEFTALT, e.KEY_F4,
+    e.KEY_TAB, e.KEY_LEFTSHIFT, e.KEY_LEFTALT, e.KEY_LEFTCTRL, e.KEY_W,
     e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE,
 ]
 OUT_REL = [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL]
@@ -189,7 +189,9 @@ class Remote:
             self.repeat_next = now + REPEAT_RATE
         if self.b_down_at is not None and not self.b_closed and now - self.b_down_at >= HOLD_CLOSE:
             self.b_closed = True
-            self.tap(e.KEY_LEFTALT, e.KEY_F4)                 # close the app window
+            # Ctrl+Shift+W: the browser closes its own window. (Alt+F4 is a window
+            # manager shortcut, and the K.OS session turns those off.)
+            self.tap(e.KEY_LEFTCTRL, e.KEY_LEFTSHIFT, e.KEY_W)  # close the app window
 
 
 STEAM_VENDOR = 0x28DE

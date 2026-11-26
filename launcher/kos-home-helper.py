@@ -344,7 +344,8 @@ def open_steam_url(url):
 
 def desktop_mode():
     """K.OS only: developer desktop mode. Stops K.OS Home from coming back,
-    turns all displays back on and closes K.OS Home."""
+    turns all displays back on and closes K.OS Home, which switches the
+    K.OS session over to the normal Plasma desktop."""
     if IS_WINDOWS:
         return False
     cfg = os.path.join(os.path.expanduser("~"), ".config")
@@ -359,7 +360,9 @@ def desktop_mode():
                 steps.append("kscreen-doctor output.%s.enable" % name)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
-    steps.append("pkill -f kos-profiles/kos-home")
+    # Closing K.OS Home ends the K.OS session, and the session start then opens
+    # the Plasma desktop (see /usr/bin/kos-start-session)
+    steps.append("/usr/bin/kos-home --quit")
     run_detached(["bash", "-c", "; ".join(steps)])
     return True
 

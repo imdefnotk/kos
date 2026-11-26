@@ -2,10 +2,10 @@
 Type=Application
 Name=K.OS Home
 Name[tr]=K.OS Home
-Comment=K.OS console home screen
-Comment[tr]=K.OS konsol ana ekranı
+Comment=Back to the K.OS console
+Comment[tr]=K.OS konsola dön
 Exec=/usr/bin/kos-home
 Icon=applications-games
 Terminal=false
-StartupNotify=true
+StartupNotify=false
 Categories=Game;

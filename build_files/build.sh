@@ -12,6 +12,34 @@ echo "Building K.OS target: ${KOS_TARGET} (${KOS_SESSION_MODE})"
 dnf5 -y install python3-evdev || dnf -y install python3-evdev
 python3 -c "import evdev"
 
+# 0b. Electron runs the K.OS Home shell (/usr/share/kos/shell) full screen with no
+#     browser parts. Downloaded from Electron's official GitHub releases and checked
+#     against its published SHA-256 checksum. To update: change both lines below
+#     (checksum from SHASUMS256.txt of that release, file electron-v<version>-linux-x64.zip).
+ELECTRON_VERSION="45.5.0"
+ELECTRON_SHA256="36b44cd0c3d355ee74557bea2353e4539f96e1a09733a52a052bd093134a6142"
+# Libraries Electron needs (already in Bazzite; listed so a base change cannot break it)
+dnf5 -y install --skip-unavailable unzip nss atk at-spi2-atk cups-libs libdrm gtk3 \
+    mesa-libgbm alsa-lib libxkbcommon libXScrnSaver libXtst
+curl -fL --retry 5 --retry-delay 5 -o /tmp/electron.zip \
+    "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/electron-v${ELECTRON_VERSION}-linux-x64.zip"
+echo "${ELECTRON_SHA256}  /tmp/electron.zip" | sha256sum -c -
+rm -rf /usr/lib/kos-electron
+install -d -m 0755 /usr/lib/kos-electron
+unzip -q /tmp/electron.zip -d /usr/lib/kos-electron
+rm -f /tmp/electron.zip
+chmod 0755 /usr/lib/kos-electron/electron
+# Chromium's sandbox helper must belong to root with the setuid bit (used only
+# when the kernel's own sandbox is not available)
+chown root:root /usr/lib/kos-electron/chrome-sandbox
+chmod 4755 /usr/lib/kos-electron/chrome-sandbox
+find /usr/share/kos/shell -type d -exec chmod 0755 {} +
+find /usr/share/kos/shell -type f -exec chmod 0644 {} +
+if ldd /usr/lib/kos-electron/electron | grep "not found"; then
+    echo "Electron is missing the libraries listed above" >&2
+    exit 1
+fi
+
 # 1. Make every K.OS program runnable (Git on Windows does not keep this setting)
 chmod 0755 /usr/bin/kos-* /usr/libexec/kos-*
 
@@ -51,12 +79,28 @@ python3 -m py_compile /usr/share/kos/home/kos-home-helper.py
 rm -rf /usr/share/kos/home/__pycache__
 
 # 8. Flavor specific startup
-if [ "${KOS_SESSION_MODE}" = "nvidia-desktop" ]; then
-    # NVIDIA: KDE starts, then kos-session opens Steam Big Picture
+#    K.OS session flavors (kos-nvidia, kos-amd): the login screen starts the
+#    "K.OS" session (/usr/share/wayland-sessions/kos.desktop): KWin with only
+#    K.OS Home, no desktop. The Plasma desktop stays installed as developer desktop mode.
+#    Old Gaming Mode test flavors end in "-deck".
+case "${KOS_SESSION_MODE}" in
+    *-deck) IS_DECK=1 ;;
+    *) IS_DECK=0 ;;
+esac
+# KWin script files must be readable by everyone
+find /usr/share/kwin/scripts/kos-console -type d -exec chmod 0755 {} +
+find /usr/share/kwin/scripts/kos-console -type f -exec chmod 0644 {} +
+chmod 0644 /usr/share/wayland-sessions/kos.desktop
+
+if [ "${IS_DECK}" = "0" ]; then
     test -f /etc/xdg/autostart/kos-session.desktop
+    test -x /usr/bin/kos-start-session
+    test -x /usr/libexec/kos-shell
+    command -v kwin_wayland
 else
-    # AMD: Bazzite Gaming Mode already starts Steam, so no KDE autostart.
+    # Gaming Mode test image: Steam Gaming Mode already starts Steam, so no K.OS
+    # session and no KDE autostart.
     # The per-user setup runs as a user service instead.
-    rm -f /etc/xdg/autostart/kos-session.desktop
+    rm -f /etc/xdg/autostart/kos-session.desktop /usr/share/wayland-sessions/kos.desktop
     systemctl --global enable kos-firstboot.service
 fi

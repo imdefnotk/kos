@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# K.OS session start. The login screen runs this when it starts the "K.OS"
+# session (K.OS logs in automatically, so normally that is right after power on).
+#
+# What you see in the K.OS session:
+#   no desktop, no taskbar, no Alt+Tab, no window shortcuts at all. Only
+#   K.OS Home, and the games and apps you open from it. Under the hood it is
+#   KWin (the KDE window manager) running with nothing but K.OS Home.
+#
+# Developer desktop mode (normal KDE Plasma desktop, both monitors):
+#   in K.OS Home choose Ayarlar > Sistem Bilgisi > Masaüstüne geç,
+#   or create the empty file ~/.config/kos-desktop-mode (for example from a
+#   text console: Ctrl+Alt+F3, log in, run: touch ~/.config/kos-desktop-mode
+#   then: systemctl reboot).
+#   To come back to the console, open "K.OS Home" from the app menu.
+#
+# Safety net: if the K.OS session fails to start 3 times in a row, this
+# login opens the normal Plasma desktop instead, so the PC is never stuck.
+# Log: ~/.local/state/kos/session.log
+set -u
+
+MARK="${HOME}/.config/kos-desktop-mode"
+STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/kos"
+FAILS_FILE="${STATE_DIR}/session-fails"
+LOG="${STATE_DIR}/session.log"
+mkdir -p "${STATE_DIR}"
+
+log() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${LOG}"
+}
+
+# Keep the log small
+if [ -f "${LOG}" ] && [ "$(stat -c %s "${LOG}" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+    mv -f "${LOG}" "${LOG}.old"
+fi
+
+start_plasma() {
+    # Start the normal Plasma session exactly the way the login screen would
+    local line=""
+    if [ -f /usr/share/wayland-sessions/plasma.desktop ]; then
+        line="$(grep -m1 '^Exec=' /usr/share/wayland-sessions/plasma.desktop | cut -d= -f2-)"
+    fi
+    [ -n "${line}" ] || line="/usr/bin/startplasma-wayland"
+    log "starting Plasma desktop: ${line}"
+    exec /bin/sh -c "${line}"
+}
+
+if [ -f "${MARK}" ]; then
+    log "desktop mode file found"
+    start_plasma
+fi
+
+fails="$(cat "${FAILS_FILE}" 2>/dev/null || echo 0)"
+case "${fails}" in ''|*[!0-9]*) fails=0 ;; esac
+if [ "${fails}" -ge 3 ]; then
+    log "K.OS session failed ${fails} times in a row, using Plasma for this login"
+    echo 0 > "${FAILS_FILE}"
+    start_plasma
+fi
+
+# Session bus (normally already provided by the system)
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+fi
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -z "${KOS_DBUS_STARTED:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    export KOS_DBUS_STARTED=1
+    exec dbus-run-session -- "$0" "$@"
+fi
+
+# Language: the language chosen in KDE settings, else the system language
+plasma_value() {
+    # $1 group, $2 key
+    awk -F= -v g="[$1]" -v k="$2" '$0 == g { s = 1; next } /^\[/ { s = 0 } s && $1 == k { print substr($0, length(k) + 2); exit }' \
+        "${HOME}/.config/plasma-localerc" 2>/dev/null
+}
+if [ -f /etc/locale.conf ] && [ -z "${LANG:-}" ]; then
+    # shellcheck disable=SC1091
+    . /etc/locale.conf
+fi
+v="$(plasma_value Formats LANG)";        [ -n "${v}" ] && LANG="${v}"
+v="$(plasma_value Translations LANGUAGE)"; [ -n "${v}" ] && LANGUAGE="${v}"
+export LANG="${LANG:-tr_TR.UTF-8}"
+[ -n "${LANGUAGE:-}" ] && export LANGUAGE
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=KDE
+export XDG_SESSION_DESKTOP=KDE
+export KDE_SESSION_VERSION=6
+export KOS_SESSION=1
+
+KWIN="kwin_wayland_wrapper"
+command -v "${KWIN}" >/dev/null 2>&1 || KWIN="kwin_wayland"
+
+# --xwayland             : games and Steam that still use X11 work
+# --no-lockscreen        : a console never shows a lock screen
+# --no-global-shortcuts  : no Alt+Tab, no Alt+F4, no Meta key menu, no screen edges
+# --exit-with-session    : the session lasts as long as kos-shell (K.OS Home) runs
+log "starting K.OS session (${KWIN}, LANG=${LANG})"
+started=$(date +%s)
+"${KWIN}" --xwayland --no-lockscreen --no-global-shortcuts \
+    --exit-with-session=/usr/libexec/kos-shell >> "${LOG}" 2>&1
+code=$?
+ran=$(( $(date +%s) - started ))
+log "K.OS session ended after ${ran}s (exit code ${code})"
+
+if [ "${ran}" -lt 20 ] && [ ! -f "${MARK}" ]; then
+    echo $(( fails + 1 )) > "${FAILS_FILE}"
+else
+    echo 0 > "${FAILS_FILE}"
+fi
+
+# Desktop mode was chosen inside K.OS Home: switch to Plasma right away
+if [ -f "${MARK}" ]; then
+    start_plasma
+fi
+
+exit "${code}"

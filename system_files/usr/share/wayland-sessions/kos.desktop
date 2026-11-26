@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=K.OS
+Comment=K.OS console: K.OS Home is the whole interface
+Comment[tr]=K.OS konsol: arayüzün tamamı K.OS Home
+Exec=/usr/bin/kos-start-session
+TryExec=/usr/bin/kos-start-session
+DesktopNames=KDE
+X-KDE-PluginInfo-Version=1

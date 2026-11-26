@@ -4,9 +4,11 @@
 #    OS shows the wrong time after switching.
 # 2. Steam tiles and startup video: add the K.OS tiles, artwork and startup
 #    video to each user's Steam, while Steam is still closed.
-# 3. Automatic login (NVIDIA desktop flavor): log the first user straight into
-#    KDE so Steam Big Picture opens without a password screen. (Gaming Mode
-#    images log in automatically on their own.)
+# 3. Automatic login: log the first user straight into the K.OS session
+#    (K.OS Home, no desktop) without a password screen. (The old Gaming Mode
+#    test images log in automatically on their own.)
+#    Relogin: after leaving the developer desktop, the login screen goes
+#    straight back into the K.OS session.
 #    To turn automatic login off, create the empty file /etc/kos/no-autologin
 set -uo pipefail
 
@@ -38,7 +40,10 @@ done < /etc/passwd
 SDDM_FILE=/etc/sddm.conf.d/zz-kos-autologin.conf
 PLM_FILE=/etc/plasmalogin.conf.d/zz-kos-autologin.conf
 
-if [ "${KOS_SESSION_MODE}" != "nvidia-desktop" ] || [ -f /etc/kos/no-autologin ]; then
+IS_DECK=0
+case "${KOS_SESSION_MODE}" in *-deck) IS_DECK=1 ;; esac
+
+if [ "${IS_DECK}" = "1" ] || [ -f /etc/kos/no-autologin ]; then
     rm -f "${SDDM_FILE}" "${PLM_FILE}"
     exit 0
 fi
@@ -62,12 +67,12 @@ write_if_changed() {
 # Writing both is harmless: each one only reads its own.
 write_if_changed "${SDDM_FILE}" "[Autologin]
 User=${KOS_USER}
-Session=plasma.desktop
-Relogin=false"
+Session=kos.desktop
+Relogin=true"
 
 write_if_changed "${PLM_FILE}" "[Autologin]
 User=${KOS_USER}
-Session=plasma.desktop
+Session=kos.desktop
 Relogin=true"
 
 exit 0

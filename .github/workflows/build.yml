@@ -38,9 +38,10 @@ jobs:
           - target: kos-nvidia-deck
             base_image: ghcr.io/ublue-os/bazzite-deck-nvidia:stable
             session_mode: nvidia-deck
+          # Product image: normal Bazzite base, same K.OS session as kos-nvidia
           - target: kos-amd
-            base_image: ghcr.io/ublue-os/bazzite-deck:stable
-            session_mode: amd-deck
+            base_image: ghcr.io/ublue-os/bazzite:stable
+            session_mode: amd-desktop
 
     steps:
       - name: Checkout repository

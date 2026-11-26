@@ -178,7 +178,7 @@
   function findTrack(done) {
     if (trackChecked) { done(); return; }
     trackChecked = true;
-    var names = ['audio/ambient.mp3', 'audio/ambient.ogg'];
+    var names = ['audio/ambient.mp3', 'audio/ambient.ogg', 'audio/kos-idle-ambient.ogg'];
     var i = 0;
     (function next() {
       if (i >= names.length) { done(); return; }

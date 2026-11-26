@@ -1,7 +1,8 @@
 # K.OS image recipe.
-# The GitHub Actions workflow builds this file twice:
-#   kos-nvidia  (base: bazzite-nvidia-open, KDE desktop that opens Steam Big Picture)
-#   kos-amd     (base: bazzite-deck, native Steam Gaming Mode)
+# The GitHub Actions workflow builds this file once per K.OS flavor:
+#   kos-nvidia       (base: bazzite-nvidia-open) boots into the K.OS session (K.OS Home)
+#   kos-amd          (base: bazzite, see COPY-INTO-workflows) boots into the K.OS session
+#   kos-nvidia-deck  (base: bazzite-deck-nvidia) old Steam Gaming Mode test image
 
 ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable
 
@@ -19,6 +20,14 @@ COPY system_files /
 
 # K.OS Home launcher (screens + helper). Private demo logos are never in GitHub, so they never get here.
 COPY launcher /usr/share/kos/home
+
+# K.OS Home shell: the full screen K.OS Home program (Electron app, see shell/main.js)
+COPY shell /usr/share/kos/shell
+
+# K.OS Console window rules (KWin script). Kept at the top of the repo because the
+# real folder is very deep; this replaces any older copy from system_files.
+COPY kwin/kos-console/metadata.json /usr/share/kwin/scripts/kos-console/metadata.json
+COPY kwin/kos-console/main.js /usr/share/kwin/scripts/kos-console/contents/code/main.js
 
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=tmpfs,dst=/tmp \

@@ -7,12 +7,12 @@
             }
         ],
         "Category": "Window Management",
-        "Description": "While K.OS Home is open, games and apps open full screen, on the K.OS Home screen, in front.",
+        "Description": "K.OS console window rules: K.OS Home is always full screen and cannot be hidden; games and apps open full screen on the K.OS Home screen, in front; closing them goes back to K.OS Home.",
         "EnabledByDefault": true,
         "Id": "kos-console",
         "License": "MIT",
         "Name": "K.OS Console",
-        "Version": "1.0"
+        "Version": "2.0"
     },
     "X-Plasma-API": "javascript",
     "X-Plasma-MainScript": "code/main.js"
