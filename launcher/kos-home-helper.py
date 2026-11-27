@@ -904,13 +904,31 @@ class GameWatcher:
         with self.lock:
             return self.current
 
+    # A game only counts as closed after it has been gone this long. On a first
+    # launch (Proton setup, shader preparation, launchers) Steam starts and stops
+    # the game's process several times; without this K.OS Home jumped in front of
+    # the game each time and the game lost the controller.
+    GONE_FOR = 10.0
+
     def loop(self):
+        gone_since = None
         while True:
             try:
                 games = running_steam_games()
-                appid = next(iter(sorted(games)), None) if games else None
+                seen = next(iter(sorted(games)), None) if games else None
+                now = time.monotonic()
                 with self.lock:
                     before = self.current
+                if seen:
+                    gone_since = None
+                    appid = seen
+                elif before:
+                    if gone_since is None:
+                        gone_since = now
+                    appid = None if now - gone_since >= self.GONE_FOR else before
+                else:
+                    appid = None
+                with self.lock:
                     self.current = appid
                 if appid != before:
                     traits = self.server.traits_for(appid) if appid else None

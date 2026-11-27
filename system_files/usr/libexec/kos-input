@@ -12,6 +12,8 @@ K.OS owns the controller, like a console does:
     gets nothing (no accidental jumps or shots).
   - Xbox button + View = Escape, in every game (games like Undertale need
     Escape to quit). Hold the Xbox button, press View.
+  - Xbox button + Menu = Steam's own Xbox button (Steam's menu in Big Picture:
+    settings, Exit Big Picture, power). Hold the Xbox button, press Menu.
   - every button can do something else, per game: another controller button,
     a keyboard key (for example Escape), or a mouse click. The left stick can
     act as arrow keys or W A S D, the right stick as a mouse. Holding a button
@@ -333,6 +335,7 @@ class Pad:
         self.guide_since = 0.0
         self.guide_used = False
         self.chord_esc = False
+        self.chord_steam = False
         self.link = None
         self.menu = False
         self.menu_keys = {}      # nav key code -> pressed
@@ -509,6 +512,12 @@ class Pad:
         if self.chord_esc:
             self.chord_esc = False
             self.keys.press(e.KEY_ESC, 0)
+        if self.chord_steam:
+            self.chord_steam = False
+            try:
+                self.clone.write(e.EV_KEY, e.BTN_MODE, 0)
+            except OSError:
+                pass
         for code, down in list(self.menu_keys.items()):
             if down:
                 self.keys.press(code, 0)
@@ -601,6 +610,20 @@ class Pad:
                 self.menu_button(self.name_of.get(ev.code), ev.value)
                 return
             name = self.name_of.get(ev.code)
+            # Xbox button + Menu = Steam's own Xbox button (Steam's menu in Big
+            # Picture: settings, Exit Big Picture, power). The plain Xbox button
+            # belongs to K.OS, so this is the way to reach Steam's menu.
+            if name == "MENU" and (self.guide_down or self.chord_steam) and ev.value in (0, 1):
+                if ev.value == 1 and not self.chord_steam:
+                    self.chord_steam = True
+                    self.guide_used = True
+                    self.clone.write(e.EV_KEY, e.BTN_MODE, 1)
+                    self.clone.syn()
+                elif ev.value == 0 and self.chord_steam:
+                    self.chord_steam = False
+                    self.clone.write(e.EV_KEY, e.BTN_MODE, 0)
+                    self.clone.syn()
+                return
             # Xbox button + View = Escape
             if name == "VIEW" and (self.guide_down or self.chord_esc) and ev.value in (0, 1):
                 if ev.value == 1 and not self.chord_esc:

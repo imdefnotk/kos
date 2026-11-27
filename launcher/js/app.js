@@ -1129,6 +1129,14 @@
     else if (kind === 'game') { gameAction(arg, el); }
     else if (kind.indexOf('ctl') === 0) { controllerAction(kind, arg); }
     else if (kind === 'desktop') {
+      // First press asks (visibly), second press within 4 seconds switches
+      if (el.dataset.confirm !== 'desktop') {
+        el.dataset.confirm = 'desktop';
+        toast('Masaüstüne geçilsin mi? Onaylamak için tekrar basın.');
+        setTimeout(function () { delete el.dataset.confirm; }, 4000);
+        return;
+      }
+      delete el.dataset.confirm;
       toast('Masaüstüne geçiliyor...');
       api('/api/desktop', { method: 'POST' }).catch(function () { toast('Masaüstüne geçilemedi.'); });
     }
@@ -1523,16 +1531,34 @@
     if (e.code === 'F2') { e.preventDefault(); toggleDiag(); }
   });
 
+  // Messages only when the number of controllers goes from none to some or back
+  // to none. On K.OS the same controller can show up twice for a moment (the
+  // real one and the K.OS copy), and one of the two going away is not news.
+  var padToastTimer = null;
+  var padShown = null;
+  function padToastLater() {
+    clearTimeout(padToastTimer);
+    padToastTimer = setTimeout(function () {
+      var has = readPads().length > 0;
+      if (padShown === null) { padShown = has; return; }
+      if (has !== padShown) {
+        padShown = has;
+        toast(has ? 'Kumanda bağlandı.' : 'Kumanda bağlantısı kesildi.');
+      }
+    }, 1500);
+  }
   window.addEventListener('gamepadconnected', function (e) {
     diag.lastEvent = 'bağlandı: ' + (e.gamepad && e.gamepad.id);
     updatePad(true);
-    toast('Kumanda bağlandı.');
+    if (padShown === null) { padShown = false; }
+    padToastLater();
   });
   window.addEventListener('gamepaddisconnected', function (e) {
     diag.lastEvent = 'ayrıldı: ' + (e.gamepad && e.gamepad.id);
     delete rest[e.gamepad && e.gamepad.index];
     updatePad(readPads().length > 0);
-    toast('Kumanda bağlantısı kesildi.');
+    if (padShown === null) { padShown = true; }
+    padToastLater();
   });
   window.addEventListener('online', function () { updateNet(); toast('İnternete bağlandı.'); });
   window.addEventListener('offline', function () { updateNet(); toast('İnternet bağlantısı kesildi.'); });

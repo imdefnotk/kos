@@ -80,6 +80,10 @@ start_plasma() {
     [ -n "${line}" ] || line="/usr/bin/startplasma-wayland"
     # Plasma's own keyboard shortcuts and hot corners back (see kos-shortcuts)
     /usr/libexec/kos-shortcuts restore >> "${LOG}" 2>&1 || true
+    # K.OS Console window rules off on the desktop (normal Alt+Tab, normal windows)
+    if command -v kwriteconfig6 >/dev/null 2>&1; then
+        kwriteconfig6 --file kwinrc --group Plugins --key kos-consoleEnabled false || true
+    fi
     # Desktop mode is for this login only: next login or restart is K.OS again
     rm -f "${MARK}"
     stop_leftovers
@@ -152,6 +156,10 @@ command -v "${KWIN}" >/dev/null 2>&1 || KWIN="kwin_wayland"
 # Console shortcuts only: Alt+Tab, Alt+Shift+Tab, Alt+F4 (K.OS Home refuses to
 # close). No Meta key menu, no overview, no program shortcuts, no hot corners.
 /usr/libexec/kos-shortcuts apply >> "${LOG}" 2>&1 || true
+# K.OS Console window rules on (only in the console, see start_plasma)
+if command -v kwriteconfig6 >/dev/null 2>&1; then
+    kwriteconfig6 --file kwinrc --group Plugins --key kos-consoleEnabled true || true
+fi
 
 # --xwayland             : games and Steam that still use X11 work
 # --no-lockscreen        : a console never shows a lock screen

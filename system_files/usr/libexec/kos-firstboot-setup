@@ -66,8 +66,14 @@ EOF
         kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false
 
         # K.OS Console window rules: K.OS Home always full screen; games open full screen,
-        # on the K.OS Home screen, in front (/usr/share/kwin/scripts/kos-console)
-        kwriteconfig6 --file kwinrc --group Plugins --key kos-consoleEnabled true
+        # on the K.OS Home screen, in front (/usr/share/kwin/scripts/kos-console).
+        # Only in the K.OS console: on the developer desktop (Plasma) they made every
+        # window full screen and broke Alt+Tab and minimized windows.
+        if [ "${KOS_SESSION:-}" = "1" ]; then
+            kwriteconfig6 --file kwinrc --group Plugins --key kos-consoleEnabled true
+        else
+            kwriteconfig6 --file kwinrc --group Plugins --key kos-consoleEnabled false
+        fi
         dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure >/dev/null 2>&1 || true
     fi
 

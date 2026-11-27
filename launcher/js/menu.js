@@ -210,7 +210,7 @@
       if (q.game) {
         list.push({ icon: 'pad', k: q.game.name + ' için', t: 'Kumanda düzeni: ' + (MODE_LABEL[q.game.layoutMode] || 'Otomatik'), s: 'Değiştirmek için seç', run: function () { cycleMode(q.game); } });
       }
-      list.push({ icon: 'info', k: 'Kısayollar', t: 'Xbox + View = Esc', s: 'Xbox tuşu: bu menü. Basılı tut: K.OS Home.', run: null });
+      list.push({ icon: 'info', k: 'Kısayollar', t: 'Xbox + View = Esc', s: 'Xbox + Menü: Steam menüsü. Xbox tuşu: bu menü. Basılı tut: K.OS Home.', run: null });
       if (q.layer && !q.layer.running) {
         list.push({ icon: 'info', k: 'K.OS kumanda katmanı', t: 'Çalışmıyor', s: 'Ayarlar > Kumandalar', run: null });
       }

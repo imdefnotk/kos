@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# kos-diag: collects everything Claude usually asks for into one file.
+# Type "kos-diag" in Konsole (Ctrl+Alt+T). The file is ~/kos-diag.txt
+# (it is replaced every time). Nothing is changed on the system.
+set -uo pipefail
+
+OUT="${HOME}/kos-diag.txt"
+RUN="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+section() { printf '\n===== %s =====\n' "$1"; }
+
+{
+    echo "K.OS diagnostics, $(date '+%Y-%m-%d %H:%M:%S')"
+    section "K.OS version"
+    cat /usr/share/kos/kos-release 2>/dev/null || echo "(no kos-release)"
+    rpm-ostree status --booted 2>/dev/null | head -n 8
+
+    section "Session"
+    echo "KOS_SESSION=${KOS_SESSION:-} XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}"
+    [ -f "${HOME}/.config/kos-desktop-mode" ] && echo "desktop mode file: present" || echo "desktop mode file: none"
+
+    section "Controller layer status"
+    cat /run/kos-input/status.json 2>/dev/null || echo "(no status)"
+    echo
+    cat "${HOME}/.config/kos/controller-active.json" 2>/dev/null | head -c 600
+    echo
+
+    section "Controller layer log (last 80 lines)"
+    journalctl -u kos-input -b --no-pager 2>/dev/null | tail -n 80
+
+    section "K.OS session log (last 60 lines)"
+    tail -n 60 "${HOME}/.local/state/kos/session.log" 2>/dev/null
+
+    section "K.OS Home helper log (last 60 lines)"
+    tail -n 60 "${RUN}/kos-home-helper.log" 2>/dev/null
+
+    section "Remote mode log (last 20 lines)"
+    tail -n 20 "${RUN}/kos-remote.log" 2>/dev/null
+
+    section "Input devices"
+    for ev in /dev/input/event*; do
+        n="$(cat "/sys/class/input/$(basename "${ev}")/device/name" 2>/dev/null)"
+        case "${n}" in
+            *[Cc]ontroller*|*[Gg]amepad*|*Xbox*|*K.OS*|*Steam*|*Pad*)
+                echo "${ev}: ${n} $(stat -c '%A' "${ev}") $(getfacl -p "${ev}" 2>/dev/null | grep '^user:' | tr '\n' ' ')"
+                ;;
+        esac
+    done
+
+    section "Running K.OS and game processes"
+    ps -eo pid,etime,args 2>/dev/null | grep -E "kos-|electron|steam -|SteamLaunch|reaper" | grep -v grep | cut -c1-200
+
+    section "Displays"
+    kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | head -n 30
+
+    section "Sound"
+    wpctl status 2>/dev/null | sed -n '/Audio/,/Video/p' | head -n 30
+} > "${OUT}" 2>&1
+
+echo "Saved: ${OUT}"
+echo "Send this file to Claude."
