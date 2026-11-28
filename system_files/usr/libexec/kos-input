@@ -110,23 +110,23 @@ def valid_target(t):
 
 
 def read_settings():
-    """Returns (enabled, layout, source). Never trusts the file blindly: it is
+    """Returns (enabled, layout, source, appid). Never trusts the file blindly: it is
     written by the user's own programs and read here as root."""
     layout = standard_layout()
     if os.path.exists(OFF_SWITCH):
-        return False, layout, "off-switch"
+        return False, layout, "off-switch", None
     user = active_user()
     if not user:
-        return True, layout, "standard"
+        return True, layout, "standard", None
     path = os.path.join(user[2], ".config", "kos", "controller-active.json")
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "r", encoding="utf-8") as f:
             raw = json.loads(f.read(200000))
     except (OSError, ValueError):
-        return True, layout, "standard"
+        return True, layout, "standard", None
     if not isinstance(raw, dict):
-        return True, layout, "standard"
+        return True, layout, "standard", None
     enabled = raw.get("enabled", True) is not False
     src = raw.get("layout") if isinstance(raw.get("layout"), dict) else {}
     btns = src.get("buttons") if isinstance(src.get("buttons"), dict) else {}
@@ -142,7 +142,9 @@ def read_settings():
     if src.get("rightStick") in ("pad", "mouse"):
         layout["rightStick"] = src["rightStick"]
     source = str(raw.get("source") or "standard")[:40]
-    return enabled, layout, source
+    appid = raw.get("appid")
+    appid = appid if isinstance(appid, int) and appid > 0 else None
+    return enabled, layout, source, appid
 
 
 def kos_action(name):
@@ -353,10 +355,8 @@ class Pad:
                 self.name_of[c] = n
         self.lstick = (e.ABS_X, e.ABS_Y)
 
-        out_caps = {k: v for k, v in caps.items() if k not in (e.EV_SYN,)}
-        self.clone = UInput(out_caps, name=dev.name, vendor=info.vendor, product=info.product,
-                            version=info.version, bustype=info.bustype,
-                            phys="kos-input/" + (dev.phys or os.path.basename(dev.path)))
+        self.out_caps = {k: v for k, v in caps.items() if k not in (e.EV_SYN,)}
+        self.clone = self.make_clone()
         self.ff_map = {}
         self.pressed = {}        # logical name -> pressed (real controller)
         self.held = {}           # logical name -> active hold target
@@ -697,6 +697,25 @@ class Pad:
             self.clone.write(e.EV_MSC, ev.code, ev.value)
 
     # -- rumble from games, passed on to the real controller
+    def make_clone(self):
+        info = self.dev.info
+        return UInput(self.out_caps, name=self.dev.name, vendor=info.vendor, product=info.product,
+                      version=info.version, bustype=info.bustype,
+                      phys="kos-input/" + (self.dev.phys or os.path.basename(self.dev.path)))
+
+    def renew_clone(self):
+        """Replaces the K.OS copy of the controller with a fresh one. While a game
+        starts, K.OS Home (Chromium) can lose track of the copy and never pick it
+        up again; a fresh copy shows up as a newly connected controller."""
+        self.release_all()
+        old = self.clone
+        self.clone = self.make_clone()
+        self.ff_map = {}
+        try:
+            old.close()
+        except OSError:
+            pass
+
     def handle_clone(self):
         for ev in self.clone.read():
             try:
@@ -839,11 +858,21 @@ class Layer:
         self.layout = standard_layout()
         self.source = "standard"
         self.settings_stamp = None
+        self.appid = None
         self.running = True
         self.link = HomeLink()
 
     def refresh_settings(self):
-        enabled, layout, source = read_settings()
+        enabled, layout, source, appid = read_settings()
+        if self.appid and not appid:
+            # A game just ended: give K.OS Home a fresh controller copy
+            for path, p in list(self.pads.items()):
+                try:
+                    p.renew_clone()
+                    log.info("game ended: fresh controller copy for %s", path)
+                except Exception as err:  # noqa: BLE001
+                    log.warning("could not renew controller copy %s: %s", path, err)
+        self.appid = appid
         if enabled != self.enabled:
             log.info("K.OS controller layer %s", "on" if enabled else "off")
             self.enabled = enabled
