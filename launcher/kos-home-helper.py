@@ -1387,7 +1387,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/game/resume":
-            self.send_json({"ok": kwin_shortcut("KOS Resume Game")})
+            ok = kwin_shortcut("KOS Resume Game")
+            log.info("resume game: %s", "sent" if ok else "window action failed")
+            self.send_json({"ok": ok})
             return
 
         if path == "/api/game/close":

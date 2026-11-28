@@ -28,6 +28,9 @@ section() { printf '\n===== %s =====\n' "$1"; }
     section "Controller layer log (last 80 lines)"
     journalctl -u kos-input -b --no-pager 2>/dev/null | tail -n 80
 
+    section "K.OS window rules (last 60 lines)"
+    grep -a "kos-console:" "${HOME}/.local/state/kos/session.log" 2>/dev/null | tail -n 60
+
     section "K.OS session log (last 150 lines)"
     tail -n 150 "${HOME}/.local/state/kos/session.log" 2>/dev/null
 

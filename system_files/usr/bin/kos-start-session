@@ -159,6 +159,9 @@ fi
 export XKB_DEFAULT_LAYOUT="${layout:-tr}"
 if [ -n "${variant}" ]; then export XKB_DEFAULT_VARIANT="${variant}"; else unset XKB_DEFAULT_VARIANT; fi
 
+# K.OS Console window rules write what they do to this log (kos-diag shows it)
+export QT_LOGGING_RULES="${QT_LOGGING_RULES:+${QT_LOGGING_RULES};}kwin_scripting.debug=true"
+
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=KDE
 export XDG_SESSION_DESKTOP=KDE

@@ -187,9 +187,35 @@ function showHome() {
     }
 }
 
+// The last game or app window that was in front (Wine games do not always look
+// like a normal app window to the checks in isApp, so "Oyuna dön" also uses this)
+var lastApp = null;
+
+function rememberApp(w) {
+    if (!w || w.deleted || isHome(w) || isMenu(w) || isSteamDesktop(w)) {
+        return;
+    }
+    var c = cls(w);
+    if (c.indexOf("org.kde.") === 0 || LEAVE_ALONE.indexOf(c) !== -1 && !(c === "steam" && /big picture/i.test(String(w.caption || "")))) {
+        return;
+    }
+    var g = w.frameGeometry;
+    if (g && (g.width < 400 || g.height < 300)) {
+        return;
+    }
+    lastApp = w;
+}
+
 function resumeGame() {
     var w = topApp(null);
+    if (!w && lastApp && !lastApp.deleted) {
+        w = lastApp;
+    }
+    print("kos-console: resume " + (w ? cls(w) + " \"" + String(w.caption || "").slice(0, 40) + "\"" : "nothing to resume"));
     if (w) {
+        if (w.minimized) {
+            w.minimized = false;
+        }
         workspace.activeWindow = w;
         return true;
     }
@@ -321,6 +347,7 @@ for (var j = 0; j < existing.length; j++) {
 // Trace: which window is in front (shows up in ~/.local/state/kos/session.log
 // and in kos-diag). Helps find what takes focus while a game is starting.
 workspace.windowActivated.connect(function (w) {
+    rememberApp(w);
     if (!w) {
         print("kos-console: active window: none");
         return;
