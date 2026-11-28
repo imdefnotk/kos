@@ -145,6 +145,14 @@
   var base = { home: D.home.slice(), soon: D.games.filter(function (g) { return g.soon; }) };
   var HOME_RECENT = 5;
 
+  // Trace lines into the helper log (seen with kos-diag), to find launch problems
+  function trace(msg) {
+    if (!live.on) { return; }
+    try {
+      api('/api/log', { method: 'POST', body: JSON.stringify({ m: msg + ' [overlay=' + (state.overlay || '-') + ' focus=' + document.hasFocus() + ']' }) }).catch(function () {});
+    } catch (e) { /* tracing must never break K.OS Home */ }
+  }
+
   function api(path, opts) {
     opts = opts || {};
     var ctrl = window.AbortController ? new AbortController() : null;
@@ -1180,6 +1188,7 @@
 
   function launchGame(g) {
     if (!g) { return; }
+    trace('launch pressed: ' + (g.name || '?') + ' running=' + (state.running ? state.running.appid : '-'));
     if (g.soon) { toast(g.name + ' henüz PC\'de yok. Çıkınca haber vereceğiz (demo).'); return; }
     if (state.running && g.live) {
       if (state.running.appid === g.steamAppId) { gameAction('resume'); return; }
@@ -1339,8 +1348,9 @@
 
   /* ---------- Input: one place for every button ---------- */
 
-  function press(button) {
+  function press(button, from) {
     if (window.KOSAudio) { KOSAudio.wake(); }
+    if (button === 'a' || button === 'b') { trace('press ' + button + ' from ' + (from || 'pad')); }
     if (button === 'a') {
       if (state.overlay === 'launch') { return; }
       activate(state.focused);
@@ -1369,8 +1379,8 @@
     // Steam turns controller presses into keys too (arrows, Enter, Escape).
     // While the controller is in use, those copies are ignored, otherwise
     // one press moves two steps.
-    if (padBusy()) { return; }
-    press(b);
+    if (padBusy()) { if (b === 'a') { trace('key Enter ignored (controller in use)'); } return; }
+    press(b, 'keyboard');
   });
 
   /* Mouse support, handy on a PC while building. */
@@ -1379,6 +1389,7 @@
     var el = e.target.closest('.f');
     if (!el || layer().indexOf(el) === -1) { return; }
     setFocus(el);
+    trace('mouse click');
     activate(el);
   });
 
@@ -1576,6 +1587,7 @@
     KOSAudio.duck(document.hidden || !document.hasFocus() || state.overlay === 'launch');
   }
   window.addEventListener('blur', function () {
+    trace('K.OS Home lost focus');
     if (state.overlay === 'ingame' || state.overlay === 'picker') { closeOverlay(); }
     if (state.overlay === 'launch') {
       state.leftForGame = true;
@@ -1584,6 +1596,7 @@
     syncDuck();
   });
   window.addEventListener('focus', function () {
+    trace('K.OS Home got focus (leftForGame=' + state.leftForGame + ')');
     if (state.overlay === 'launch' && state.leftForGame) { closeOverlay(); }
     state.leftForGame = false;
     syncDuck();

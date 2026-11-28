@@ -65,6 +65,8 @@ LINUX_APPS = {
     "browser": ["/usr/bin/kos-webapp", "browser", "https://www.google.com", "browser"],
     "steam": ["steam", "steam://open/bigpicture"],
     "windows": ["/usr/bin/kos-boot-windows"],
+    # Developer tile (Claude on the console while testing); remove before retail
+    "firefox": ["/usr/libexec/kos-firefox", "https://claude.ai"],
 }
 
 # Picture kinds: (custom art in userdata/<id>/config/grid, file names in Steam's
@@ -1382,6 +1384,17 @@ class Handler(BaseHTTPRequestHandler):
             appid = self.server.watcher.running()
             ctl.apply(appid, self.server.traits_for(appid) if appid else None, force=True)
             self.send_json({"ok": True, "config": cfg})
+            return
+
+        if path == "/api/log":
+            # K.OS Home's own trace lines (presses, focus, launch screen) for kos-diag
+            try:
+                msg = str(json.loads(body.decode("utf-8") or "{}").get("m", ""))[:300]
+            except (ValueError, AttributeError):
+                msg = ""
+            if msg:
+                log.info("home: %s", msg)
+            self.send_json({"ok": True})
             return
 
         if path == "/api/desktop":

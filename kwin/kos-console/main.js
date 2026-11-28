@@ -314,3 +314,14 @@ for (var j = 0; j < existing.length; j++) {
         hideSteamDesktop(existing[j]);
     }
 }
+
+// Trace: which window is in front (shows up in ~/.local/state/kos/session.log
+// and in kos-diag). Helps find what takes focus while a game is starting.
+workspace.windowActivated.connect(function (w) {
+    if (!w) {
+        print("kos-console: active window: none");
+        return;
+    }
+    print("kos-console: active window: " + cls(w) + " \"" + String(w.caption || "").slice(0, 60) + "\" " +
+          Math.round(w.width) + "x" + Math.round(w.height));
+});

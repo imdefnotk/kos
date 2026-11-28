@@ -114,6 +114,12 @@ window.KOS_DATA = {
       desc: 'Steam mağazası ve kütüphanen. Oyunların K.OS kütüphanesinde de görünür.'
     },
     {
+      // Developer tile, remove before retail
+      id: 'firefox', name: 'Firefox', url: 'https://claude.ai', net: true,
+      color: '#7A2E12', icon: 'globe',
+      desc: 'Geliştirici: Firefox (Claude için). Klavye ve fare ile. Alt+Tab ile K.OS Home\'a dön.'
+    },
+    {
       id: 'windows', name: "Windows'a Geç", url: null, net: false,
       color: '#27272A', icon: 'swap',
       desc: 'Valorant, LoL ve Game Pass PC oyunları için Windows ile yeniden başlat.'

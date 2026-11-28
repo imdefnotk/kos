@@ -71,7 +71,12 @@ function quitNow() {
   app.exit(0);
 }
 
-// kos-home --quit and the session end send SIGTERM
+// kos-home --quit and the session end send SIGTERM. Electron's Chromium part
+// handles SIGTERM itself (the handlers below usually never run): it asks every
+// window to close, which K.OS Home refuses unless "quitting" is set. Without
+// before-quit the first SIGTERM did nothing and only a second one closed K.OS
+// Home ("Masaüstüne geç" had to be chosen twice).
+app.on('before-quit', () => { quitting = true; });
 process.on('SIGTERM', quitNow);
 process.on('SIGINT', quitNow);
 

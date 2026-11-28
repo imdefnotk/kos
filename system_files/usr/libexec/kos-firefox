@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Developer tile: Firefox from K.OS Home (for example to use claude.ai while
+# testing on the console). Not part of the product: remove before retail.
+set -uo pipefail
+URL="${1:-https://claude.ai}"
+if command -v flatpak >/dev/null 2>&1 && flatpak info org.mozilla.firefox >/dev/null 2>&1; then
+    exec flatpak run org.mozilla.firefox --new-window "${URL}"
+fi
+if command -v firefox >/dev/null 2>&1; then
+    exec firefox --new-window "${URL}"
+fi
+exit 1
