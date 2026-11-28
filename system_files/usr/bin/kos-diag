@@ -55,6 +55,9 @@ section() { printf '\n===== %s =====\n' "$1"; }
 
     section "Sound"
     wpctl status 2>/dev/null | sed -n '/Audio/,/Video/p' | head -n 30
+
+    section "Sound system log since power on (first 60 lines)"
+    journalctl --user -b -u pipewire -u wireplumber --no-pager 2>/dev/null | head -n 60
 } > "${OUT}" 2>&1
 
 echo "Saved: ${OUT}"

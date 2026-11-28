@@ -900,11 +900,16 @@ class GameWatcher:
     def __init__(self, server):
         self.server = server
         self.current = None
+        self.alive = False  # the game's process is there right now
         self.lock = threading.Lock()
 
     def running(self):
         with self.lock:
             return self.current
+
+    def is_alive(self):
+        with self.lock:
+            return self.alive
 
     # A game only counts as closed after it has been gone this long. On a first
     # launch (Proton setup, shader preparation, launchers) Steam starts and stops
@@ -932,6 +937,7 @@ class GameWatcher:
                     appid = None
                 with self.lock:
                     self.current = appid
+                    self.alive = bool(seen)
                 if appid != before:
                     traits = self.server.traits_for(appid) if appid else None
                     self.server.controller.apply(appid, traits)
@@ -1279,7 +1285,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/running":
             appid = self.server.watcher.running()
-            self.send_json({"ok": True, "appid": appid,
+            # alive: the game's process is there right now (appid stays set for
+            # 10 s after it disappears, see GameWatcher.GONE_FOR)
+            self.send_json({"ok": True, "appid": appid, "alive": self.server.watcher.is_alive(),
                             "name": self.server.game_name(appid) if appid else ""})
             return
 

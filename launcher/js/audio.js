@@ -215,6 +215,14 @@
         applyLevel(4);
       });
       ['keydown', 'pointerdown'].forEach(function (ev) { window.addEventListener(ev, wake, true); });
+      // Keep the music going by itself: at power on the sound output can drop
+      // for a moment (Steam and the screens starting), which paused the music
+      // until the next button press. Check every 2 seconds and restart it.
+      setInterval(function () {
+        if (!ctx) { return; }
+        if (ctx.state === 'suspended' && target() > 0) { ctx.resume().catch(function () {}); }
+        if (track && target() > 0 && track.paused) { track.play().catch(function () {}); }
+      }, 2000);
     },
     wake: wake,
     setMusic: function (on) { musicOn = on; wake(); applyLevel(1.5); },

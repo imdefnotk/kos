@@ -626,7 +626,8 @@
     if (!live.on || live.platform !== 'linux') { return; }
     api('/api/running', { timeout: 3000 }).then(function (r) {
       var before = state.running ? state.running.appid : null;
-      state.running = r && r.appid ? { appid: r.appid, name: r.name || 'Oyun' } : null;
+      // alive=false: the game's process is gone (a failed start); no "Oyuna dön" then
+      state.running = r && r.appid && r.alive !== false ? { appid: r.appid, name: r.name || 'Oyun' } : null;
       var now = state.running ? state.running.appid : null;
       if (before !== now && state.screen === 'home' && !state.overlay) { renderHero(D.home.indexOf(state.heroKey) < 0 ? 0 : D.home.indexOf(state.heroKey)); }
       if (showMenu && state.running && (!state.overlay || state.overlay === 'launch')) {
@@ -1198,6 +1199,8 @@
     if (window.KOSAudio) { KOSAudio.duck(true); }
     openOverlay('launch');
     state.leftForGame = false;
+    state.launch = { game: g, at: Date.now(), seen: false, failed: false };
+    $('#launch').classList.remove('playing');
     $('#launchTitle').textContent = g.name;
     $('#launchText').textContent = 'Başlatılıyor...';
     $('#launchInfo').innerHTML = g.live ? launchInfo(g) : '';
@@ -1211,6 +1214,7 @@
     }
     api('/api/launch/' + g.steamAppId, { method: 'POST' }).then(function (r) {
       if (!r.ok) { throw new Error(r.error || 'launch'); }
+      watchLaunch();
       setTimeout(function () {
         if (state.overlay === 'launch' && !state.leftForGame) {
           $('#launchText').textContent = 'Oyun açılıyor. Steam ilk açılışta biraz zaman alabilir. Geri dönmek için B tuşuna basın.';
@@ -1221,6 +1225,28 @@
         $('#launchText').textContent = 'Oyun başlatılamadı. Steam\'in yüklü olduğundan emin olun. Geri dönmek için B tuşuna basın.';
       }
     });
+  }
+
+  // While the launch screen is up: notice a game that closes again by itself
+  // right after starting (it happens on a first start, while Steam is still
+  // signing in), and offer to try again instead of leaving K.OS Home stuck.
+  function watchLaunch() {
+    var L = state.launch;
+    if (!L || state.overlay !== 'launch' || L.failed) { return; }
+    api('/api/running', { timeout: 3000 }).then(function (r) {
+      if (state.launch !== L || state.overlay !== 'launch') { return; }
+      var alive = r && r.alive && r.appid === L.game.steamAppId;
+      if (alive) { L.seen = true; }
+      var young = Date.now() - L.at < 60000;
+      if (!alive && young && (L.seen || Date.now() - L.at > 45000)) {
+        L.failed = true;
+        trace('launch failed: game closed by itself');
+        $('#launch').classList.remove('playing');
+        $('#launchText').textContent = 'Oyun açılmadı veya hemen kapandı. Tekrar denemek için A, geri dönmek için B tuşuna basın.';
+        return;
+      }
+      if (young) { setTimeout(watchLaunch, 2000); }
+    }).catch(function () { setTimeout(watchLaunch, 3000); });
   }
 
   function openApp(a) {
@@ -1352,7 +1378,10 @@
     if (window.KOSAudio) { KOSAudio.wake(); }
     if (button === 'a' || button === 'b') { trace('press ' + button + ' from ' + (from || 'pad')); }
     if (button === 'a') {
-      if (state.overlay === 'launch') { return; }
+      if (state.overlay === 'launch') {
+        if (state.launch && state.launch.failed) { var again = state.launch.game; closeOverlay(); launchGame(again); }
+        return;
+      }
       activate(state.focused);
     }
     else if (button === 'b') { back(); }
@@ -1588,6 +1617,7 @@
   }
   window.addEventListener('blur', function () {
     trace('K.OS Home lost focus');
+    state.blurAt = Date.now();
     if (state.overlay === 'ingame' || state.overlay === 'picker') { closeOverlay(); }
     if (state.overlay === 'launch') {
       state.leftForGame = true;
@@ -1597,7 +1627,20 @@
   });
   window.addEventListener('focus', function () {
     trace('K.OS Home got focus (leftForGame=' + state.leftForGame + ')');
-    if (state.overlay === 'launch' && state.leftForGame) { closeOverlay(); }
+    if (state.overlay === 'launch' && state.leftForGame) {
+      // Away for a long time = the game was played and is over (or the player
+      // came back on purpose): normal K.OS Home. Away only briefly = a Steam
+      // window or the game's launcher came and went while the game is still
+      // starting: keep the launch screen up instead of dropping back to Home.
+      var away = Date.now() - (state.blurAt || 0);
+      if (away > 8000 || (state.launch && state.launch.failed)) {
+        if (!(state.launch && state.launch.failed)) { closeOverlay(); }
+      } else {
+        $('#launch').classList.remove('playing');
+        $('#launchText').textContent = 'Başlatılıyor...';
+        trace('still starting: launch screen kept (away ' + away + ' ms)');
+      }
+    }
     state.leftForGame = false;
     syncDuck();
     refreshLibrary();
