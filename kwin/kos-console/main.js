@@ -176,6 +176,9 @@ function topApp(except) {
 
 function showHome() {
     var home = homeWindow();
+    // Going to K.OS Home on purpose: the Quick Menu closing must not give the
+    // focus back to the game or app it covered
+    menuPrev = null;
     if (home) {
         if (home.minimized) {
             home.minimized = false;

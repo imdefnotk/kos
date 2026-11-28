@@ -1605,12 +1605,14 @@
   }
   window.addEventListener('gamepadconnected', function (e) {
     diag.lastEvent = 'bağlandı: ' + (e.gamepad && e.gamepad.id);
+    trace('controller connected (' + readPads().length + ' seen)');
     updatePad(true);
     if (padShown === null) { padShown = false; }
     padToastLater();
   });
   window.addEventListener('gamepaddisconnected', function (e) {
     diag.lastEvent = 'ayrıldı: ' + (e.gamepad && e.gamepad.id);
+    trace('controller disconnected (' + readPads().length + ' seen)');
     delete rest[e.gamepad && e.gamepad.index];
     updatePad(readPads().length > 0);
     if (padShown === null) { padShown = true; }

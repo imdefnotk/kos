@@ -47,6 +47,26 @@ section() { printf '\n===== %s =====\n' "$1"; }
         esac
     done
 
+    section "Who has the controllers open"
+    for ev in /dev/input/event*; do
+        n="$(cat "/sys/class/input/$(basename "${ev}")/device/name" 2>/dev/null)"
+        case "${n}" in
+            *Xbox*|*[Cc]ontroller*|*[Gg]amepad*)
+                echo "${ev} (${n}):"
+                for fd in /proc/[0-9]*/fd/*; do
+                    [ "$(readlink "${fd}" 2>/dev/null)" = "${ev}" ] || continue
+                    pid="$(echo "${fd}" | cut -d/ -f3)"
+                    echo "   pid ${pid} $(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | cut -c1-120)"
+                done
+                ;;
+        esac
+    done
+
+    section "Keyboard layout"
+    echo "XKB_DEFAULT_LAYOUT=${XKB_DEFAULT_LAYOUT:-} XKB_DEFAULT_VARIANT=${XKB_DEFAULT_VARIANT:-}"
+    localectl status 2>/dev/null
+    grep -A6 '^\[Layout\]' "${HOME}/.config/kxkbrc" 2>/dev/null || echo "(no kxkbrc layout)"
+
     section "Running K.OS and game processes"
     ps -eo pid,etime,args 2>/dev/null | grep -E "kos-|electron|steam -|SteamLaunch|reaper" | grep -v grep | cut -c1-200
 

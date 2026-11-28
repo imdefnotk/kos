@@ -142,6 +142,23 @@ v="$(plasma_value Translations LANGUAGE)"; [ -n "${v}" ] && LANGUAGE="${v}"
 export LANG="${LANG:-tr_TR.UTF-8}"
 [ -n "${LANGUAGE:-}" ] && export LANGUAGE
 
+# Keyboard layout for the console. On the desktop, Plasma applies the layout
+# itself; KWin alone (the K.OS session) does not, and fell back to US English.
+# Order: the layout chosen in KDE settings, else the system keyboard, else
+# Turkish Q (K.'s default).
+kxkb_value() {
+    awk -F= -v k="$1" '$0 == "[Layout]" { s = 1; next } /^\[/ { s = 0 } s && $1 == k { print substr($0, length(k) + 2); exit }' \
+        "${HOME}/.config/kxkbrc" 2>/dev/null
+}
+layout="$(kxkb_value LayoutList | cut -d, -f1)"
+variant="$(kxkb_value VariantList | cut -d, -f1)"
+if [ -z "${layout}" ] && command -v localectl >/dev/null 2>&1; then
+    layout="$(localectl status 2>/dev/null | awk -F': ' '/X11 Layout/ { print $2; exit }' | cut -d, -f1)"
+    variant="$(localectl status 2>/dev/null | awk -F': ' '/X11 Variant/ { print $2; exit }' | cut -d, -f1)"
+fi
+export XKB_DEFAULT_LAYOUT="${layout:-tr}"
+if [ -n "${variant}" ]; then export XKB_DEFAULT_VARIANT="${variant}"; else unset XKB_DEFAULT_VARIANT; fi
+
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=KDE
 export XDG_SESSION_DESKTOP=KDE
@@ -164,7 +181,7 @@ fi
 # --xwayland             : games and Steam that still use X11 work
 # --no-lockscreen        : a console never shows a lock screen
 # --exit-with-session    : the session lasts as long as kos-shell (K.OS Home) runs
-log "starting K.OS session (${KWIN}, LANG=${LANG})"
+log "starting K.OS session (${KWIN}, LANG=${LANG}, keyboard ${XKB_DEFAULT_LAYOUT}${XKB_DEFAULT_VARIANT:+/${XKB_DEFAULT_VARIANT}})"
 started=$(date +%s)
 "${KWIN}" --xwayland --no-lockscreen \
     --exit-with-session=/usr/libexec/kos-shell >> "${LOG}" 2>&1
