@@ -7,6 +7,7 @@ After=systemd-udevd.service systemd-logind.service
 Type=simple
 ExecStart=/usr/libexec/kos-input
 # Always give the real controllers back to everyone, even after a crash
+ExecStopPost=-/usr/bin/rm -f /run/kos-input/active
 ExecStopPost=-/usr/bin/udevadm trigger --action=change --subsystem-match=input --subsystem-match=hidraw
 Restart=on-failure
 RestartSec=2

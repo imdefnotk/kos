@@ -52,6 +52,7 @@ rm -f /etc/.gitkeep /usr/.gitkeep
 install -d -m 0755 /usr/share/polkit-1/rules.d
 mv /etc/polkit-1/rules.d/49-kos-windows-boot.rules /usr/share/polkit-1/rules.d/49-kos-windows-boot.rules
 chmod 0644 /usr/share/polkit-1/rules.d/49-kos-windows-boot.rules
+chmod 0644 /usr/lib/udev/rules.d/72-kos-input.rules
 
 # 4. Record which K.OS flavor this is, so scripts on the PC can check it
 install -d -m 0755 /usr/share/kos

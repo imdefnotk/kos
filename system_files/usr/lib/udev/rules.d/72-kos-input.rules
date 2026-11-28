@@ -1,0 +1,13 @@
+# K.OS controller layer (kos-input): while it runs, real game controllers are
+# only readable by kos-input (root). Games, Steam and K.OS Home all use the one
+# K.OS copy of each controller that kos-input makes. Without this, K.OS Home and
+# Steam could open the real controller in the moment before kos-input locked it,
+# and then saw the same controller twice (K.OS Home lost the copy after games,
+# Steam showed "controller connected" twice).
+#
+# Only while /run/kos-input/active exists (kos-input creates it when it starts and
+# removes it when it stops, then gives the controllers back with udevadm trigger).
+# The K.OS copies themselves (and other virtual controllers such as Steam's) live
+# under /devices/virtual/input/ and are never touched. Runs before 73-seat-late,
+# which gives the logged-in user access through the uaccess tag.
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*|js*", ENV{ID_INPUT_JOYSTICK}=="1", DEVPATH!="*/devices/virtual/input/*", TEST=="/run/kos-input/active", MODE="0000", TAG-="uaccess"
