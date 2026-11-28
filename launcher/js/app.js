@@ -1232,20 +1232,36 @@
   // signing in), and offer to try again instead of leaving K.OS Home stuck.
   function watchLaunch() {
     var L = state.launch;
-    if (!L || state.overlay !== 'launch' || L.failed) { return; }
+    if (!L || state.overlay !== 'launch') { return; }
     api('/api/running', { timeout: 3000 }).then(function (r) {
       if (state.launch !== L || state.overlay !== 'launch') { return; }
       var alive = r && r.alive && r.appid === L.game.steamAppId;
-      if (alive) { L.seen = true; }
-      var young = Date.now() - L.at < 60000;
-      if (!alive && young && (L.seen || Date.now() - L.at > 45000)) {
-        L.failed = true;
-        trace('launch failed: game closed by itself');
-        $('#launch').classList.remove('playing');
-        $('#launchText').textContent = 'Oyun açılmadı veya hemen kapandı. Tekrar denemek için A, geri dönmek için B tuşuna basın.';
-        return;
+      var now = Date.now();
+      if (alive) {
+        L.seen = true;
+        L.goneAt = 0;
+        if (L.failed) {
+          // Steam started the game again by itself (it does that on a first
+          // start): back to "starting"
+          L.failed = false;
+          trace('game is running again');
+          $('#launchText').textContent = 'Başlatılıyor...';
+        }
+      } else if (!L.goneAt) {
+        L.goneAt = now;
       }
-      if (young) { setTimeout(watchLaunch, 2000); }
+      // Only give up when nothing has run for 30 s (Steam sometimes closes the
+      // game right after starting it and starts it again about 20 s later), or
+      // when nothing has started at all after 60 s.
+      var goneLong = L.seen && L.goneAt && now - L.goneAt > 30000;
+      var neverStarted = !L.seen && now - L.at > 60000;
+      if (!L.failed && (goneLong || neverStarted)) {
+        L.failed = true;
+        trace('launch failed: no game process for 30 s');
+        $('#launch').classList.remove('playing');
+        $('#launchText').textContent = 'Oyun açılamadı. Tekrar denemek için A, geri dönmek için B tuşuna basın.';
+      }
+      if (now - L.at < 180000) { setTimeout(watchLaunch, 2000); }
     }).catch(function () { setTimeout(watchLaunch, 3000); });
   }
 
@@ -1633,10 +1649,12 @@
       // window or the game's launcher came and went while the game is still
       // starting: keep the launch screen up instead of dropping back to Home.
       var away = Date.now() - (state.blurAt || 0);
-      if (away > 8000 || (state.launch && state.launch.failed)) {
-        if (!(state.launch && state.launch.failed)) { closeOverlay(); }
-      } else {
-        $('#launch').classList.remove('playing');
+      var failed = state.launch && state.launch.failed;
+      // Never leave the black "game in front" screen up while K.OS Home is in front
+      $('#launch').classList.remove('playing');
+      if (away > 8000) {
+        closeOverlay();
+      } else if (!failed) {
         $('#launchText').textContent = 'Başlatılıyor...';
         trace('still starting: launch screen kept (away ' + away + ' ms)');
       }

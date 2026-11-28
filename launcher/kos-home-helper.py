@@ -677,17 +677,31 @@ def close_steam_game(appid):
         tree.append(p)
         todo.extend(kids.get(p, []))
     me = os.getpid()
-    victims = [p for p in tree if p != me]
+
+    def started(pid):
+        # Start time of a process (field 22 of /proc/<pid>/stat), so a number
+        # that is reused by a new process later is never killed by mistake
+        try:
+            with open("/proc/%d/stat" % pid, "r") as f:
+                return f.read().rsplit(")", 1)[1].split()[19]
+        except (OSError, IndexError):
+            return None
+
+    victims = [(p, started(p)) for p in tree if p != me]
+    victims = [(p, t) for p, t in victims if t is not None]
     # Children first, the reaper last, so Steam sees a normal game end
-    for p in reversed(victims):
+    for p, _t in reversed(victims):
         try:
             os.kill(p, signal.SIGTERM)
         except OSError:
             pass
+    log.info("closing game %s: %d processes", appid, len(victims))
 
     def finish():
         time.sleep(6)
-        for p in reversed(victims):
+        for p, t in reversed(victims):
+            if started(p) != t:
+                continue  # already gone (or the number now belongs to another process)
             try:
                 os.kill(p, signal.SIGKILL)
             except OSError:
